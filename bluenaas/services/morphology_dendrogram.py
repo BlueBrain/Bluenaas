@@ -2,6 +2,7 @@ import json
 import re
 import signal
 import multiprocessing as mp
+from bluenaas.utils.streaming import free_resources_after_streaming
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from http import HTTPStatus as status
@@ -97,9 +98,13 @@ def get_single_morphology_dendrogram(
                 yield q_result
 
         return StreamingResponse(
-            queue_streamify(
-                que=morpho_dend_queue,
-                stop_event=stop_event,
+            free_resources_after_streaming(
+                lambda: queue_streamify(
+                    que=morpho_dend_queue,
+                    stop_event=stop_event,
+                ),
+                morpho_dend_queue,
+                process,
             ),
             media_type="application/x-ndjson",
         )

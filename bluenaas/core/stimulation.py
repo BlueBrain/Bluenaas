@@ -711,6 +711,7 @@ def apply_multiple_stimulus(
                         process_finished += 1
                         if process_finished == len(args):
                             simulation_queue.put(QUEUE_STOP_EVENT)
+                            break
                 except queue.Empty:
                     simulation_queue.put(QUEUE_STOP_EVENT)
                     break
@@ -772,6 +773,7 @@ def apply_multiple_frequency(
                         process_finished += 1
                         if process_finished == len(args):
                             simulation_queue.put(QUEUE_STOP_EVENT)
+                            break
                 except queue.Empty:
                     simulation_queue.put(QUEUE_STOP_EVENT)
                     break

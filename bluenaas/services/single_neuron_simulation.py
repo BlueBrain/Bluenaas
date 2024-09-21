@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 from itertools import chain
+from bluenaas.utils.streaming import free_resources_after_streaming
 from loguru import logger
 from http import HTTPStatus as status
 from fastapi.responses import StreamingResponse
@@ -198,6 +199,7 @@ def execute_single_neuron_simulation(
             ),
             name=f"simulation_processor:{req_id}",
         )
+
         _process.start()
 
         def queue_streamify():
@@ -262,7 +264,7 @@ def execute_single_neuron_simulation(
             logger.info(f"Simulation {req_id} completed")
 
         return StreamingResponse(
-            queue_streamify(),
+            free_resources_after_streaming(queue_streamify, simulation_queue, _process),
             media_type="application/octet-stream",
         )
     except Exception as ex:

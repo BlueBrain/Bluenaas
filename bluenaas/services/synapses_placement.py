@@ -66,24 +66,28 @@ def generate_synapses_placement(
         process.start()
 
         synapses = None
-        while True:
-            try:
-                record = synapses_queue.get(timeout=1)
-            except QueueEmptyException:
-                if process.is_alive():
-                    continue
-                if not synapses_queue.empty():
-                    continue
-                else:
-                    raise Exception("Child process died unexpectedly")
-            if isinstance(record, SynapseGenerationError):
-                raise record
-            if record == QUEUE_STOP_EVENT or stop_event.is_set():
-                break
-            if record is not None:
-                synapses = record
-                break
-
+        try:
+            while True:
+                try:
+                    record = synapses_queue.get(timeout=1)
+                except QueueEmptyException:
+                    if process.is_alive():
+                        continue
+                    if not synapses_queue.empty():
+                        continue
+                    else:
+                        raise Exception("Child process died unexpectedly")
+                if isinstance(record, SynapseGenerationError):
+                    raise record
+                if record == QUEUE_STOP_EVENT or stop_event.is_set():
+                    break
+                if record is not None:
+                    synapses = record
+                    break
+        finally:
+            synapses_queue.close()
+            synapses_queue.join_thread()
+            process.join()
         return synapses
     except SynapseGenerationError as ex:
         raise BlueNaasError(

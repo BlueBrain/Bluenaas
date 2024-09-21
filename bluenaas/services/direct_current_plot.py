@@ -78,22 +78,26 @@ def get_direct_current_plot_data(
         process.start()
 
         result: list = []
-        while True:
-            try:
-                q_result = plot_queue.get(timeout=1)
-            except QueueEmptyException:
-                if process.is_alive():
-                    continue
-                if not plot_queue.empty():
-                    continue
-                else:
-                    raise Exception("Child process died unexpectedly")
-            if isinstance(q_result, list):
-                result = q_result
+        try:
+            while True:
+                try:
+                    q_result = plot_queue.get(timeout=1)
+                except QueueEmptyException:
+                    if process.is_alive():
+                        continue
+                    if not plot_queue.empty():
+                        continue
+                    else:
+                        raise Exception("Child process died unexpectedly")
+                if isinstance(q_result, list):
+                    result = q_result
 
-            if q_result == QUEUE_STOP_EVENT or stop_event.is_set():
-                break
-
+                if q_result == QUEUE_STOP_EVENT or stop_event.is_set():
+                    break
+        finally:
+            plot_queue.close()
+            plot_queue.join_thread()
+            process.join()
         return result
     except Exception as ex:
         logger.exception(f"retrieving stimulus direct current data failed {ex}")
