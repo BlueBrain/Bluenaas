@@ -1,6 +1,7 @@
 # TODO: IMPORTANT: This methods is replicated from BlueCellab and any changes from the library should be updated here too
 
 from __future__ import annotations
+import os
 import queue
 from loguru import logger
 import neuron
@@ -693,7 +694,7 @@ def apply_multiple_stimulus(
         )
 
         with ctx.Pool(
-            processes=None,
+            processes=min(len(args), os.cpu_count() or len(args)),
             initializer=init_process_worker,
             initargs=(neuron_global_params,),
             maxtasksperchild=1,
@@ -755,7 +756,7 @@ def apply_multiple_frequency(
         logger.debug(f"Applying simulation for {len(args)} frequencies")
 
         with ctx.Pool(
-            processes=None,
+            processes=min(len(args), os.cpu_count() or len(args)),
             initializer=init_process_worker,
             initargs=(neuron_global_params,),
             maxtasksperchild=1,
