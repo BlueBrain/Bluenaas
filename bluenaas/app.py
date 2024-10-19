@@ -1,10 +1,14 @@
-from typing import Awaitable, Callable
 import uuid
+import sentry_sdk
+from contextlib import asynccontextmanager
+from typing import Awaitable, Callable
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.middleware.gzip import GZipMiddleware
-import sentry_sdk
+from starlette.middleware.cors import CORSMiddleware
+from sentry_sdk.integrations.asgi import SentryAsgiMiddleware
+from scalar_fastapi import get_scalar_api_reference  # type: ignore
 
 from bluenaas.config.settings import settings
 from bluenaas.core.exceptions import (
@@ -12,13 +16,16 @@ from bluenaas.core.exceptions import (
     BlueNaasErrorCode,
     BlueNaasErrorResponse,
 )
+
+from bluenaas.infrastructure.celery.worker_scalability import (
+    scale_controller,
+)
+
 from bluenaas.routes.morphology import router as morphology_router
 from bluenaas.routes.simulation import router as simulation_router
 from bluenaas.routes.graph_data import router as graph_router
 from bluenaas.routes.synaptome import router as synaptome_router
 from bluenaas.routes.validation import router as validation_router
-from starlette.middleware.cors import CORSMiddleware
-from sentry_sdk.integrations.asgi import SentryAsgiMiddleware
 
 
 sentry_sdk.init(
@@ -29,11 +36,19 @@ sentry_sdk.init(
 )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scale_controller()
+    yield
+
+
 app = FastAPI(
     debug=True,
     title=settings.APP_NAME,
     openapi_url=f"{settings.BASE_PATH}/openapi.json",
     docs_url=f"{settings.BASE_PATH}/docs",
+    # NOTE: needed if scaling controller is enabled
+    lifespan=lifespan,
 )
 
 app.add_middleware(SentryAsgiMiddleware)
@@ -87,15 +102,25 @@ async def bluenaas_exception_handler(
 base_router = APIRouter(prefix=settings.BASE_PATH)
 
 
-@base_router.get("/")
+@base_router.get("/", include_in_schema=False)
 def root() -> str:
     return "Server is running."
 
 
 # TODO: add a proper health check logic, see https://pypi.org/project/fastapi-health/.
-@base_router.get("/health")
+@base_router.get("/health", include_in_schema=False)
 def health() -> str:
     return "OK"
+
+
+@app.get("/sdocs", include_in_schema=False)
+async def scalar_html():
+    return get_scalar_api_reference(
+        openapi_url=app.openapi_url,
+        title=app.title,
+        # hideDarkModeToggle=False,
+        # theme="modern"
+    )
 
 
 base_router.include_router(morphology_router)

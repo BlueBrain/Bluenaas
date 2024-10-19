@@ -16,7 +16,7 @@ class StimulusFactoryPlot:
         self.dt = 0.1
         self.factory = StimulusFactory(dt=self.dt)
 
-        self.protocol_name = params.stimulusProtocol
+        self.protocol_name = params.stimulus_protocol
         self.threshold_current = threshold_current
         self.amplitudes = params.amplitudes
 

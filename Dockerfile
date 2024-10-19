@@ -24,7 +24,10 @@ ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
 COPY ./bluenaas /app/bluenaas
+COPY ./scripts/celery.sh /app/celery.sh
+
+RUN chmod +x /app/celery.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "bluenaas.app:app", "--port", "8000", "--host", "0.0.0.0"]
+CMD ["./scripts/entrypoint.sh"]

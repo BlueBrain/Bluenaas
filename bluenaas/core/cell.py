@@ -1,15 +1,12 @@
 """Cell module."""
 
 # pylint: disable=import-outside-toplevel
-import multiprocessing as mp
 import os
 import re
 from loguru import logger
-from multiprocessing.synchronize import Event
+from bluenaas.core.stimulation.utils import is_current_varying_simulation
 from bluenaas.domains.morphology import SynapseSeries
-from bluenaas.domains.simulation import (
-    SingleNeuronSimulationConfig,
-)
+from bluenaas.domains.simulation import SingleNeuronSimulationConfig
 from bluenaas.utils.util import (
     compile_mechanisms,
     get_sec_name,
@@ -183,61 +180,41 @@ class BaseCell:
 
         return protocol_mapping[protocol_name]
 
-    def start_current_varying_simulation(
+    def start_simulation(
         self,
         config: SingleNeuronSimulationConfig,
-        synapse_generation_config: list[SynapseSeries] | None,
-        simulation_queue: mp.Queue,
-        req_id: str,
-        stop_event: Event
+        current_synapse_series: list[SynapseSeries] | None,
+        frequency_to_synapse_series: dict[float, list[SynapseSeries]] | None,
+        enable_realtime,
     ):
-        from bluenaas.core.stimulation import apply_multiple_stimulus
+        from bluenaas.core.stimulation.current import apply_multiple_stimulus
+        from bluenaas.core.stimulation.frequency import apply_multiple_frequency
 
         try:
-            apply_multiple_stimulus(
+            if is_current_varying_simulation(config):
+                return apply_multiple_stimulus(
+                    cell=self._cell,
+                    current_injection=config.current_injection,
+                    recording_locations=config.record_from,
+                    experiment_setup=config.conditions,
+                    simulation_duration=config.duration,
+                    current_synapse_series=current_synapse_series,
+                    enable_realtime=enable_realtime,
+                )
+            return apply_multiple_frequency(
                 cell=self._cell,
-                current_injection=config.currentInjection,
-                recording_locations=config.recordFrom,
+                current_injection=config.current_injection,
+                recording_locations=config.record_from,
                 experiment_setup=config.conditions,
-                simulation_duration=config.simulationDuration,
-                synapse_generation_config=synapse_generation_config,
-                simulation_queue=simulation_queue,
-                req_id=req_id,
-                stop_event=stop_event
-            )
-        except Exception as e:
-            logger.exception(
-                f"Apply Generic Single Neuron Simulation error: {e}",
-            )
-            raise Exception(f"Apply Generic Single Neuron Simulation error: {e}") from e
-
-    def start_frequency_varying_simulation(
-        self,
-        config: SingleNeuronSimulationConfig,
-        frequency_to_synapse_series: dict[float, list[SynapseSeries]],
-        simulation_queue: mp.Queue,
-        req_id: str,
-        stop_event: Event
-    ):
-        from bluenaas.core.stimulation import apply_multiple_frequency
-
-        try:
-            apply_multiple_frequency(
-                cell=self._cell,
-                current_injection=config.currentInjection,
-                recording_locations=config.recordFrom,
-                experiment_setup=config.conditions,
-                simulation_duration=config.simulationDuration,
+                simulation_duration=config.duration,
                 frequency_to_synapse_series=frequency_to_synapse_series,
-                simulation_queue=simulation_queue,
-                req_id=req_id,
-                stop_event=stop_event
+                enable_realtime=enable_realtime,
             )
         except Exception as e:
             logger.exception(
-                f"Apply Generic Single Neuron Simulation error: {e}",
+                f"Single Neuron Simulation error: {e}",
             )
-            raise Exception(f"Apply Generic Single Neuron Simulation error: {e}") from e
+            raise Exception(f"Single Neuron Simulation error: {e}")
 
 
 class HocCell(BaseCell):

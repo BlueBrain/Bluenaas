@@ -16,7 +16,7 @@ from bluenaas.utils.const import QUEUE_STOP_EVENT
 
 
 def _build_direct_current_plot_data(
-    model_id: str,
+    model_self: str,
     config: StimulationPlotConfig,
     token: str,
     queue: mp.Queue,
@@ -30,7 +30,7 @@ def _build_direct_current_plot_data(
 
     try:
         model = model_factory(
-            model_id=model_id,
+            model_self=model_self,
             hyamp=None,
             bearer_token=token,
         )
@@ -39,7 +39,7 @@ def _build_direct_current_plot_data(
             model.threshold_current,
         )
         result_data = stimulus_factory_plot.apply_stim()
-        logger.info(f"result_data: {result_data}")
+
         queue.put(result_data)
         queue.put(QUEUE_STOP_EVENT)
 
@@ -52,7 +52,7 @@ def _build_direct_current_plot_data(
 
 
 def get_direct_current_plot_data(
-    model_id: str,
+    model_self: str,
     config: StimulationPlotConfig,
     token: str,
     req_id: str,
@@ -66,7 +66,7 @@ def get_direct_current_plot_data(
         process = ctx.Process(
             target=_build_direct_current_plot_data,
             args=(
-                model_id,
+                model_self,
                 config,
                 token,
                 plot_queue,

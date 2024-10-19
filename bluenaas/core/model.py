@@ -22,7 +22,7 @@ from bluenaas.domains.morphology import (
     SynapsesPlacementConfig,
 )
 from bluenaas.domains.nexus import NexusBaseResource
-from bluenaas.domains.simulation import SynapseSimulationConfig
+from bluenaas.domains.simulation import SynaptomeSimulationConfig
 from bluenaas.external.nexus.nexus import Nexus
 from bluenaas.utils.util import (
     get_sections,
@@ -33,7 +33,7 @@ from bluenaas.utils.util import (
     set_vector_length,
 )
 from math import floor, modf
-from random import seed, random, randint, choice
+from random import seed, random, randint
 import numpy as np
 
 SUPPORTED_SYNAPSES_TYPES = ["apic", "basal", "dend"]
@@ -44,8 +44,8 @@ MAXIMUM_ALLOWED_SYNAPSES = 20_000
 
 
 class Model:
-    def __init__(self, *, model_id: str, hyamp: float | None, token: str):
-        self.model_id: str = model_id
+    def __init__(self, *, model_self: str, hyamp: float | None, token: str):
+        self.model_self: str = model_self
         self.token: str = token
         self.CELL: HocCell = None
         self.threshold_current: int = 1
@@ -54,10 +54,10 @@ class Model:
 
     def build_model(self):
         """Prepare model."""
-        if self.model_id is None:
+        if self.model_self is None:
             raise Exception("Missing model _self url")
 
-        nexus_helper = Nexus({"token": self.token, "model_self_url": self.model_id})
+        nexus_helper = Nexus({"token": self.token, "model_self_url": self.model_self})
         [holding_current, threshold_current] = nexus_helper.get_currents()
         self.threshold_current = threshold_current
 
@@ -216,7 +216,7 @@ class Model:
         section_info: LocationData,
         seg_indices_to_include: List[int],
         placement_config: SynapseConfig,
-        simulation_config: SynapseSimulationConfig,
+        simulation_config: SynaptomeSimulationConfig,
     ):
         from bluecellulab.circuit.synapse_properties import SynapseProperty  # type: ignore
 
@@ -237,7 +237,7 @@ class Model:
             {
                 SynapseProperty.PRE_GID: 1,
                 SynapseProperty.AXONAL_DELAY: 1.0,
-                SynapseProperty.G_SYNX: simulation_config.weightScalar,
+                SynapseProperty.G_SYNX: simulation_config.weight_scalar,
                 SynapseProperty.TYPE: placement_config.type,
                 SynapseProperty.U_SYN: 0.505514,
                 SynapseProperty.D_SYN: 684.279663,
@@ -258,7 +258,7 @@ class Model:
     def get_synapse_series(
         self,
         synapse_placement_config: SynapseConfig,
-        synapse_simulation_config: SynapseSimulationConfig,
+        synapse_simulation_config: SynaptomeSimulationConfig,
         offset: int,
         frequencies_to_apply: list[float],
     ) -> list[SynapseSeries]:
@@ -323,12 +323,12 @@ class Model:
 
 
 def model_factory(
-    model_id: str,
+    model_self: str,
     hyamp: float | None,
     bearer_token: str,
 ):
     model = Model(
-        model_id=model_id,
+        model_self=model_self,
         hyamp=hyamp,
         token=bearer_token,
     )
@@ -344,7 +344,7 @@ class SynaptomeDetails(NamedTuple):
 
 
 def fetch_synaptome_model_details(synaptome_self: str, bearer_token: str):
-    """For a given synamptome model, returns the following:
+    """For a given synaptome model, returns the following:
     1. The base me-model or e-model
     2. The configuration for all synapse groups added to the given synaptome model
     """
@@ -359,7 +359,9 @@ def fetch_synaptome_model_details(synaptome_self: str, bearer_token: str):
         }
 
         synaptome_resource_req = requests.get(
-            synaptome_self, headers=resource_headers, verify=False
+            synaptome_self,
+            headers=resource_headers,
+            verify=False,
         )
         synaptome_resource_req.raise_for_status()
         synaptome_model_resource = synaptome_resource_req.json()

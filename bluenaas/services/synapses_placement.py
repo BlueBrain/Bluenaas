@@ -14,8 +14,8 @@ from bluenaas.domains.morphology import SynapsePlacementBody, SynapsePlacementRe
 from bluenaas.utils.const import QUEUE_STOP_EVENT
 
 
-def _generate_synpases(
-    model_id: str,
+def _generate_synapses(
+    model_self: str,
     token: str,
     params: SynapsePlacementBody,
     queue: mp.Queue,
@@ -29,7 +29,7 @@ def _generate_synpases(
 
     try:
         model = model_factory(
-            model_id=model_id,
+            model_self=model_self,
             hyamp=None,
             bearer_token=token,
         )
@@ -47,7 +47,7 @@ def _generate_synpases(
 
 
 def generate_synapses_placement(
-    model_id: str,
+    model_self: str,
     token: str,
     req_id: str,
     params: SynapsePlacementBody,
@@ -58,8 +58,8 @@ def generate_synapses_placement(
         synapses_queue = ctx.Queue()
         stop_event = ctx.Event()
         process = ctx.Process(
-            target=_generate_synpases,
-            args=(model_id, token, params, synapses_queue, stop_event),
+            target=_generate_synapses,
+            args=(model_self, token, params, synapses_queue, stop_event),
             name=f"synapses_processor:{req_id}",
         )
         process.daemon = True

@@ -4,7 +4,6 @@ import signal
 import multiprocessing as mp
 from multiprocessing.synchronize import Event
 from bluenaas.utils.streaming import StreamingResponseWithCleanup, cleanup
-from fastapi.responses import StreamingResponse
 from loguru import logger
 from http import HTTPStatus as status
 from queue import Empty as QueueEmptyException
@@ -18,7 +17,7 @@ from bluenaas.utils.const import QUEUE_STOP_EVENT
 
 
 def _build_morphology_dendrogram(
-    model_id: str,
+    model_self: str,
     token: str,
     queue: mp.Queue,
     stop_event: Event,
@@ -31,7 +30,7 @@ def _build_morphology_dendrogram(
 
     try:
         model = model_factory(
-            model_id=model_id,
+            model_self=model_self,
             hyamp=None,
             bearer_token=token,
         )
@@ -55,7 +54,7 @@ def _build_morphology_dendrogram(
 
 
 def get_single_morphology_dendrogram(
-    model_id: str,
+    model_self: str,
     token: str,
     req_id: str,
 ):
@@ -68,7 +67,7 @@ def get_single_morphology_dendrogram(
         process = ctx.Process(
             target=_build_morphology_dendrogram,
             args=(
-                model_id,
+                model_self,
                 token,
                 morpho_dend_queue,
                 stop_event,
@@ -98,7 +97,9 @@ def get_single_morphology_dendrogram(
                 yield q_result
 
         return StreamingResponseWithCleanup(
-            queue_streamify(que=morpho_dend_queue, stop_event=stop_event), media_type="application/x-ndjson", finalizer=lambda: cleanup(stop_event, process)
+            queue_streamify(que=morpho_dend_queue, stop_event=stop_event),
+            media_type="application/x-ndjson",
+            finalizer=lambda: cleanup(stop_event, process),
         )
 
     except Exception as ex:

@@ -23,9 +23,21 @@ pandas = "^2.2.2"
 annotated-types = "^0.7.0"
 sentry-sdk = {version = "^2.13.0", extras = ["fastapi"]}
 filelock = "^3.16.0"
+celery = {extras = ["redis", "sqlalchemy"], version = "^5.4.0"}
+boto3 = "^1.35.28"
+psycopg2-binary = "^2.9.9"
+sqlalchemy = "2.0.35"
+redis = "5.1.0"
+psutil = "^6.0.0"
+watchdog = {extras = ["watchmedo"], version = "^5.0.3"}
+billiard = "^4.2.1"
+mypy-boto3 = "^1.35.34"
+boto3-stubs = {extras = ["cloudwatch", "ec2", "ecs"], version = "^1.35.34"}
+scalar-fastapi = "^1.0.3"
 
 [tool.poetry.group.types.dependencies]
 types-requests = "^2.32.0.20240712"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
@@ -33,3 +45,6 @@ build-backend = "poetry.core.masonry.api"
 [tool.pyright]
 venvPath = "/Users/meddah/Library/Caches/pypoetry/virtualenvs"
 venv = "bluenaas-DrmS_1CG-py3.12"
+
+[tool.poetry.scripts]
+monitor = "bluenaas.infrastructure.celery.events_monitoring:main"

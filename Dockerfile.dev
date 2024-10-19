@@ -19,12 +19,14 @@ RUN apt-get update \
 RUN --mount=type=cache,target=$POETRY_CACHE_DIR poetry install --no-root --no-dev --no-interaction
 
 RUN mkdir -p /opt/blue-naas/models
-
 ENV VIRTUAL_ENV=/app/.venv \
-    PATH="/app/.venv/bin:$PATH"
+PATH="/app/.venv/bin:$PATH"
 
-COPY ./bluenaas /app/bluenaas
+COPY . /app
+COPY ./scripts/celery.sh /app/celery.sh
+
+RUN chmod +x /app/celery.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "bluenaas.app:app", "--port", "8000", "--reload", "--host", "0.0.0.0"]
+CMD ["./scripts/entrypoint.sh"]

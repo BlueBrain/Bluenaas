@@ -1,11 +1,13 @@
 from typing import List, Literal, Optional, TypedDict
-from loguru import logger
 from pydantic import BaseModel, field_validator
 import sympy as sp  # type: ignore
 import pandas  # type: ignore
 from enum import Enum
 
-from bluenaas.domains.simulation import CurrentInjectionConfig, SynapseSimulationConfig
+from bluenaas.domains.simulation import (
+    CurrentInjectionConfig,
+    SynaptomeSimulationConfig,
+)
 
 
 class LocationData(BaseModel):
@@ -39,7 +41,7 @@ class SectionTarget(Enum):
     basal = "basal"
     dendrite = "dend"
     soma = "soma"
-    axom = "axon"
+    axon = "axon"
 
     @classmethod
     def list(cls):
@@ -80,8 +82,6 @@ class SynapseConfig(BaseModel):
     @field_validator("formula", mode="before")
     @classmethod
     def validate_formula_depends_on_distribution(cls, value, info):
-        logger.debug(f"if {info}")
-        logger.debug(f"value {value}")
         if "distribution" in info.data and info.data.get("distribution") == "formula":
             if not value or not isinstance(value, str):
                 raise ValueError(
@@ -136,7 +136,7 @@ SynapseSeries = TypedDict(
         "id": int,
         "series": pandas.Series,
         "directCurrentConfig": CurrentInjectionConfig,
-        "synapseSimulationConfig": SynapseSimulationConfig,
+        "synapseSimulationConfig": SynaptomeSimulationConfig,
         "frequencies_to_apply": list[float],
     },
 )

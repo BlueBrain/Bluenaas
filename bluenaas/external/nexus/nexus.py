@@ -1,14 +1,28 @@
 """Nexus module."""
 
+from datetime import datetime
 import zipfile
 import os
 from pathlib import Path
-from urllib.parse import quote_plus, unquote
+from urllib.parse import quote_plus, unquote, urlencode
 from loguru import logger
 import requests
-
+from bluenaas.domains.simulation import (
+    SingleNeuronSimulationConfig,
+    StimulationItemResponse,
+    SimulationStatus,
+)
+from bluenaas.domains.nexus import (
+    NexusSimulationPayload,
+    BaseNexusSimulationResource,
+)
 from bluenaas.config.settings import settings
+from bluenaas.utils.ensure_list import ensure_list
+from bluenaas.utils.generate_id import generate_id
 from bluenaas.utils.util import get_model_path
+from bluenaas.core.exceptions import ResourceDeprecationError, SimulationError
+from typing import Any, Optional, Sequence
+import json
 
 HTTP_TIMEOUT = 10  # seconds
 
@@ -18,6 +32,7 @@ defaultIdBaseUrl = "https://bbp.epfl.ch/data/bbp/mmb-point-neuron-framework-mode
 HOC_FORMAT = ["application/x-neuron-hoc", "application/hoc"]
 
 RWX_TO_ALL = 0o777
+
 
 def opener(path, flags):
     return os.open(path, flags, RWX_TO_ALL)
@@ -33,15 +48,23 @@ def extract_org_project_from_id(url) -> dict[str, str | None]:
         return {"org": None, "project": None}  # Handle URLs with fewer than 3 parts
 
 
-def ensure_list(value):
-    # If it's a dictionary, convert it to a list containing the dictionary
-    if isinstance(value, dict):
-        return [value]
-    # If it's already a list, return it as is
-    elif isinstance(value, list):
-        return value
-    else:
-        raise TypeError("Value must be either a dictionary or a list.")
+def construct_time_range(
+    start_date: Optional[datetime], end_date: Optional[datetime]
+) -> str:
+    """
+    Constructs a time range string based on the given start and end dates.
+
+    Args:
+        start_date (Optional[datetime]): The start date of the range.
+        end_date (Optional[datetime]): The end date of the range.
+
+    Returns:
+        str: The constructed time range string in the format 'start..end'.
+    """
+    start_str = start_date.strftime("%Y-%m-%dT%H:%M:%SZ") if start_date else "*"
+    end_str = end_date.strftime("%Y-%m-%dT%H:%M:%SZ") if end_date else "*"
+
+    return "{}..{}".format(start_str, end_str)
 
 
 class Nexus:
@@ -69,8 +92,75 @@ class Nexus:
             raise Exception("Error fetching resource", r.json())
         return r.json()
 
+    def update_resource_by_id(
+        self, org_label, project_label, resource_id, previous_rev, payload
+    ):
+        endpoint = f"{settings.NEXUS_ROOT_URI}/resources/{org_label}/{project_label}/_/{quote_plus(resource_id)}?rev={previous_rev}"
+        payload_without_metadata = {
+            k: v for k, v in payload.items() if not k.startswith("_")
+        }
+
+        r = requests.put(
+            endpoint,
+            headers=self.content_modification_headers(),
+            data=json.dumps(payload_without_metadata),
+            timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            raise Exception("Error updating resource", r.json())
+        return r.json()
+
     def fetch_resource_by_self(self, resource_self):
         r = requests.get(resource_self, headers=self.headers, timeout=HTTP_TIMEOUT)
+        if not r.ok:
+            raise Exception("Error fetching resource", r.json())
+        return r.json()
+
+    def fetch_resource_for_org_project(self, org_label, project_label, resource_id):
+        endpoint = f"{settings.NEXUS_ROOT_URI}/resolvers/{org_label}/{project_label}/_/{quote_plus(resource_id, safe=":")}"
+        r = requests.get(
+            endpoint,
+            headers=self.headers,
+            timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            raise Exception("Error fetching resource", r.json())
+        return r.json()
+
+    def deprecate_resource(self, org_label, project_label, resource_id, previous_rev):
+        endpoint = f"{settings.NEXUS_ROOT_URI}/resources/{org_label}/{project_label}/_/{quote_plus(resource_id)}?rev={previous_rev}"
+        r = requests.delete(
+            endpoint,
+            headers=self.content_modification_headers(),
+            timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            raise ResourceDeprecationError("Error deprecating resource", r.json())
+        return r.json()
+
+    def fetch_resources_of_type(
+        self,
+        org_label: str,
+        project_label: str,
+        res_types: Sequence[str],
+        offset: int,
+        size: int,
+        created_at_start: datetime,
+        created_at_end: datetime,
+    ):
+        query_params = [("type", res_type) for res_type in res_types]
+        query_params.append(("size", str(size)))
+        query_params.append(("from", str(offset)))
+        query_params.append(
+            ("createdAt", construct_time_range(created_at_start, created_at_end))
+        )
+
+        endpoint = f"{settings.NEXUS_ROOT_URI}/resources/{org_label}/{project_label}?{urlencode(query_params)}"
+        r = requests.get(
+            endpoint,
+            headers=self.headers,
+            timeout=HTTP_TIMEOUT,
+        )
         if not r.ok:
             raise Exception("Error fetching resource", r.json())
         return r.json()
@@ -78,8 +168,110 @@ class Nexus:
     def fetch_file_by_url(self, file_url):
         r = requests.get(file_url, headers=self.headers, timeout=HTTP_TIMEOUT)
         if not r.ok:
-            raise Exception("Error fetching file", r.status_code)
+            raise Exception("Error fetching file", r.json())
         return r
+
+    def fetch_file_metadata(self, file_url):
+        r = requests.get(
+            file_url,
+            headers=self.headers | {"Accept": "application/ld+json"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            raise Exception("Error fetching file", r.json())
+        return r
+
+    def content_modification_headers(self):
+        return self.headers | {
+            "Content-Type": "application/json",
+            "Accept": "*/*",
+        }
+
+    def save_file_to_nexus(
+        self,
+        payload: dict,
+        content_type: str,
+        filename: str,
+        file_url: str,
+        org_id: str,
+        project_id: str,
+    ) -> dict:
+        stringified_data = json.dumps(payload)
+
+        # Prepare the files for the POST request
+        files = {"file": (filename, stringified_data, content_type)}
+        file_headers = self.headers | {
+            # mandatory to upload to a S3 storage (AWS)
+            "x-nxs-file-content-length": str(len(stringified_data))
+        }
+
+        response = requests.post(
+            file_url, headers=file_headers, files=files, timeout=HTTP_TIMEOUT
+        )
+
+        if not response.ok:
+            raise Exception("Error saving file to nexus", response.json())
+        return response.json()
+
+    def create_nexus_distribution(
+        self, payload: dict, filename: str, org_id: str, project_id: str
+    ):
+        content_type = "application/json"
+        file_url = f"{settings.NEXUS_ROOT_URI}/files/{org_id}/{project_id}"
+
+        saved_file = self.save_file_to_nexus(
+            payload=payload,
+            content_type=content_type,
+            filename=filename,
+            file_url=file_url,
+            org_id=org_id,
+            project_id=project_id,
+        )
+
+        distribution_url = f"{settings.NEXUS_ROOT_URI}/files/{org_id}/{project_id}/{quote_plus(saved_file["@id"])}?rev={saved_file["_rev"]}"
+        distribution = {
+            "@type": "DataDownload",
+            "name": saved_file["_filename"],
+            "contentSize": {
+                "unitCode": "bytes",
+                "value": saved_file["_bytes"],
+            },
+            "contentUrl": distribution_url,
+            "encodingFormat": saved_file["_mediaType"],
+            "digest": {
+                "algorithm": saved_file["_digest"]["_algorithm"],
+                "value": saved_file["_digest"]["_value"],
+            },
+        }
+        return distribution
+
+    # Note: This function doesn't seem to work for distributions uploaded on s3. See discussion here - https://bluebrainproject.slack.com/archives/G013PKBUHT2/p1728567806810799
+    def update_nexus_distribution(
+        self, file_url: str, filename: str, content_type: str, data_to_add: dict
+    ):
+        current_distribution = self.fetch_file_by_url(file_url=file_url).json()
+
+        updated_json = current_distribution | data_to_add
+
+        # Prepare the files for the PUT request
+        files = {"file": (filename, json.dumps(updated_json), content_type)}
+        file_headers = self.headers | {
+            # mandatory to upload to a S3 storage (AWS)
+            "x-nxs-file-content-length": str(len(updated_json))
+        }
+
+        response = requests.put(
+            file_url,
+            headers=file_headers,
+            files=files,
+            timeout=HTTP_TIMEOUT,
+        )
+
+        if not response.ok:
+            raise Exception(
+                f"Error updating distribution: {response.status_code}", response.json()
+            )
+        return response.json()
 
     def compose_url(self, url):
         return self.nexus_base + quote_plus(url, safe=":")
@@ -92,7 +284,7 @@ class Nexus:
         workflow_resource = self.fetch_resource_by_id(workflow_id)
 
         configuration = None
-        workflow_resource_list = ensure_list(workflow_resource["hasPart"])
+        workflow_resource_list = ensure_list(workflow_resource["hasPart"], dict)
         for part in workflow_resource_list:
             if part["@type"] == "EModelConfiguration":
                 configuration = part
@@ -111,7 +303,7 @@ class Nexus:
         morphology_resource = self.fetch_resource_by_id(morph_id)
 
         swc = None
-        distributions = ensure_list(morphology_resource["distribution"])
+        distributions = ensure_list(morphology_resource["distribution"], dict)
         for distribution in distributions:
             if distribution["encodingFormat"] == "application/swc":
                 swc = distribution
@@ -137,9 +329,9 @@ class Nexus:
 
     def get_memodel_morphology(self, memodel_resource):
         morphology_id = None
-        for haspart in ensure_list(memodel_resource["hasPart"]):
-            if haspart["@type"] == "NeuronMorphology":
-                morphology_id = haspart["@id"]
+        for haspart in ensure_list(memodel_resource["hasPart"], dict):
+            if haspart.get("@type") == "NeuronMorphology":
+                morphology_id = haspart.get("@id")
         if morphology_id is None:
             raise Exception("No Morphology found in ME-Model")
 
@@ -148,8 +340,8 @@ class Nexus:
     def get_mechanisms(self, configuration):
         # fetch only SubCellularModelScripts. Morphologies will be fetched later
         scripts = []
-        for config in ensure_list(configuration["uses"]):
-            if config["@type"] != "NeuronMorphology":
+        for config in ensure_list(configuration["uses"], dict):
+            if config.get("@type") != "NeuronMorphology":
                 scripts.append(config)
 
         model_resources = []
@@ -168,11 +360,11 @@ class Nexus:
 
         mechanisms = []
         for model_resource in model_resources:
-            distributions = ensure_list(model_resource["distribution"])
+            distributions = ensure_list(model_resource["distribution"], dict)
             distribution = list(
                 filter(
-                    lambda x: x["encodingFormat"] == "application/mod"
-                    or x["encodingFormat"] == "application/neuron-mod",
+                    lambda x: x.get("encodingFormat") == "application/mod"
+                    or x.get("encodingFormat") == "application/neuron-mod",
                     distributions,
                 )
             )[0]
@@ -187,7 +379,7 @@ class Nexus:
         workflow_resource = self.fetch_resource_by_id(workflow_id)
 
         script = None
-        for generated in ensure_list(workflow_resource["generates"]):
+        for generated in ensure_list(workflow_resource["generates"], dict):
             if generated["@type"] == "EModelScript":
                 script = generated
                 break
@@ -236,7 +428,9 @@ class Nexus:
             f.write(content)
 
     def copy_file_content(self, source_file: Path, target_file: Path):
-        with open(source_file, "r") as src, open(target_file, "w", opener=opener) as dst:
+        with open(source_file, "r") as src, open(
+            target_file, "w", opener=opener
+        ) as dst:
             dst.write(src.read())
 
     def create_model_folder(self, hoc_file, morphology_obj, mechanisms):
@@ -336,3 +530,192 @@ class Nexus:
 
     def get_model_uuid(self):
         return self.model_uuid
+
+    def create_simulation_resource(
+        self,
+        simulation_config: SingleNeuronSimulationConfig,
+        status: SimulationStatus,
+        org_id: str,
+        project_id: str,
+    ) -> dict:
+        # Step 1: Get me_model
+        try:
+            model = self.fetch_resource_by_id(self.model_id)
+        except Exception:
+            raise SimulationError(f"No me_model with self {self.model_id} found")
+
+        # Step 2: Create simulation resource with status = "PENDING"
+        try:
+            sim_name = (
+                "single-neuron-simulation-{}".format(generate_id(10))
+                if simulation_config.type == "single-neuron-simulation"
+                else "synaptome-simulation-{}".format(generate_id(10))
+            )
+            description = "simulation"
+            simulation_resource = self.prepare_nexus_simulation(
+                sim_name=sim_name,
+                description=description,
+                config=simulation_config,
+                model=model,
+                status=status,
+            )
+            simulation_resource_url = f"{settings.NEXUS_ROOT_URI}/resources/{org_id}/{project_id}?indexing=sync"
+            simulation_response = requests.post(
+                url=simulation_resource_url,
+                headers=self.content_modification_headers(),
+                data=simulation_resource.model_dump_json(by_alias=True),
+                timeout=HTTP_TIMEOUT,
+            )
+            simulation_response.raise_for_status()
+            return simulation_response.json()
+        except Exception as error:
+            raise SimulationError(
+                f"Failed to create simulation resource {error} {simulation_response.json()}"
+            )
+
+    def update_simulation_status(
+        self,
+        org_id: str,
+        project_id: str,
+        resource_self: str,
+        status: SimulationStatus,
+        is_draft: bool,
+        err: Optional[str] = None,
+    ):
+        try:
+            simulation_resource = self.fetch_resource_by_self(resource_self)
+
+            updated_resource = simulation_resource | {
+                "status": status,
+                "isDraft": is_draft,
+                **({"error": err} if err is not None else {}),
+            }
+
+            return self.update_resource_by_id(
+                org_label=org_id,
+                project_label=project_id,
+                resource_id=simulation_resource["@id"],
+                previous_rev=simulation_resource["_rev"],
+                payload=updated_resource,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not update simulation resource {resource_self} with status {status}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not update simulation resource {resource_self} with status {status}"
+            )
+
+    def save_simulation_results(
+        self,
+        resource_self: str,
+        config: dict,
+        stimulus_plot_data: list[StimulationItemResponse],
+        org_id: str,
+        project_id: str,
+        status: SimulationStatus,
+        is_draft: bool,
+        results: Any,
+    ):
+        # Step 1: Create a distribution file to save results.
+        try:
+            simulation_config = SingleNeuronSimulationConfig.model_validate(config)
+            distribution_payload = NexusSimulationPayload(
+                config=simulation_config,
+                simulation=results,
+                stimulus=stimulus_plot_data,
+            )
+            distribution_name = (
+                "simulation-config-single-neuron.json"
+                if simulation_config.type == "single-neuron-simulation"
+                else "simulation-config-synaptome.json"
+            )
+            distribution_resource = self.create_nexus_distribution(
+                payload=distribution_payload.model_dump(by_alias=True),
+                filename=distribution_name,
+                org_id=org_id,
+                project_id=project_id,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not create distribution with simulation results for resource {resource_self}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not create distribution with simulation results for resource {resource_self}"
+            )
+
+        # Step 2: Add distribution file to simulation resource as well as update status
+        try:
+            simulation_resource = self.fetch_resource_by_self(resource_self)
+
+            updated_resource = simulation_resource | {
+                "status": status,
+                "isDraft": is_draft,
+                "distribution": [distribution_resource],
+            }
+
+            return self.update_resource_by_id(
+                org_label=org_id,
+                project_label=project_id,
+                resource_id=simulation_resource["@id"],
+                previous_rev=simulation_resource["_rev"],
+                payload=updated_resource,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not update simulation resource {resource_self} with status {status}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not update simulation resource {resource_self} with status {status}"
+            )
+
+    def prepare_nexus_simulation(
+        self,
+        sim_name: str,
+        description: str,
+        config: SingleNeuronSimulationConfig,
+        model: dict,
+        status: str,
+    ):
+        record_locations = [
+            f"{r.section}_{r.offset}" for r in ensure_list(config.record_from, str)
+        ]
+        return BaseNexusSimulationResource(
+            type=["Entity", "SingleNeuronSimulation"]
+            if config.type == "single-neuron-simulation"
+            else ["Entity", "SynaptomeSimulation"],
+            name=sim_name,
+            description=description,
+            context="https://bbp.neuroshapes.org",
+            distribution=[],
+            injectionLocation=config.current_injection.inject_to,
+            recordingLocation=ensure_list(record_locations, str),
+            brainLocation=model["brainLocation"],
+            # Model can be MEModel or SingleNeuronSynaptome
+            used={"@type": model["@type"], "@id": model["@id"]},
+            isDraft=True,
+            status=status,
+        )
+
+    def create_simulation_distribution(
+        self,
+        config: SingleNeuronSimulationConfig,
+        stimulus: list[StimulationItemResponse],
+        org_id: str,
+        project_id: str,
+    ):
+        distribution_payload = NexusSimulationPayload(
+            config=config, simulation=None, stimulus=stimulus
+        )
+        distribution_name = (
+            "simulation-config-single-neuron.json"
+            if config.type == "single-neuron-simulation"
+            else "simulation-config-synaptome.json"
+        )
+        distribution_resource = self.create_nexus_distribution(
+            payload=distribution_payload.model_dump(by_alias=True),
+            filename=distribution_name,
+            org_id=org_id,
+            project_id=project_id,
+        )
+        return distribution_resource

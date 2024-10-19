@@ -9,21 +9,25 @@ from bluenaas.domains.simulation import (
 )
 
 
-router = APIRouter(prefix="/graph")
+router = APIRouter(prefix="/graph", tags=["Graph"])
 
 
 @router.post(
     "/direct-current-plot",
     response_model=List[StimulationItemResponse],
+    summary="Current stimulation plot data",
 )
 def retrieve_stimulation_plot(
     request: Request,
-    model_id: str,
+    model_self: str,
     config: StimulationPlotConfig,
     token: str = Depends(verify_jwt),
 ):
+    """
+    Retrieves data for current stimulation plots based on the specified model and configuration.
+    """
     return get_direct_current_plot_data(
-        model_id=model_id,
+        model_self=model_self,
         config=config,
         token=token,
         req_id=request.state.request_id,
