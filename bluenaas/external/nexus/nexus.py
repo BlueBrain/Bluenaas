@@ -357,10 +357,11 @@ class Nexus:
         for extra_mech in extra_mechanisms:
             mech = self.fetch_resource_by_self(extra_mech)
             model_resources.append(mech)
-
+        # logger.info(f'@@-> {model_resources=}')
         mechanisms = []
         for model_resource in model_resources:
             distributions = ensure_list(model_resource["distribution"], dict)
+            logger.info(f'@@-> ds:{model_resource["distribution"]}')
             distribution = list(
                 filter(
                     lambda x: x.get("encodingFormat") == "application/mod"

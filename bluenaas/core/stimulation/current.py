@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from typing import Any
 from loguru import logger
 from bluenaas.core.stimulation.utils import (
@@ -40,7 +41,8 @@ def _run_current_varying_stimulus(
         [simulation injection_section_name (provided)]: {injection_section_name}
         [simulation recording_locations]: {recording_locations}
     """)
-
+    cwd = os.getcwd()
+    logger.info(f"@@@@-> {cwd=}")
     (cell, current) = basic_simulation_config(
         template_params,
         stimulus,

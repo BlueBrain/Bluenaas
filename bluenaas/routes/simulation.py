@@ -4,30 +4,26 @@ contains the single neuron simulation endpoint (single neuron, single neuron wit
 """
 
 from datetime import datetime
-import time
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query
 from typing import Optional
 
 
-from bluenaas.config.settings import settings
 from bluenaas.domains.nexus import DeprecateNexusResponse
 from bluenaas.domains.simulation import (
-    SingleNeuronSimulationConfig,
     SimulationResultItemResponse,
     SimulationType,
     PaginatedSimulationsResponse,
     StreamSimulationBodyRequest,
-    StreamSimulationResponse,
 )
 from bluenaas.infrastructure.kc.auth import verify_jwt
-from bluenaas.infrastructure.celery import create_dummy_task
-from bluenaas.services.simulation.run_simulation import run_simulation
-from bluenaas.services.simulation.stop_simulation import (
-    StopSimulationResponse,
-    stop_simulation,
+from bluenaas.services.simulation.run_distributed_simulation import (
+    run_distributed_simulation,
 )
-from bluenaas.services.simulation.submit_simulation import submit_simulation
-from bluenaas.core.exceptions import BlueNaasError
+from bluenaas.services.simulation.shutdown_distributed_simulation import (
+    StopSimulationResponse,
+    do_shutdown_simulation,
+)
+
 from bluenaas.services.simulation.fetch_simulation_status_and_results import (
     fetch_simulation_status_and_results,
 )
@@ -43,113 +39,105 @@ router = APIRouter(
 
 
 @router.post(
-    "/single-neuron/dummy",
-    include_in_schema=settings.DEPLOYMENT_ENV != "production",
+    "/single-neuron/{org_id}/{project_id}/run",
+    summary="Run neuron simulation distributed per worker",
 )
-def dummy_simulation(
-    tasks: int = Query(min=10, default=20),
-):
-    for i in range(tasks):
-        create_dummy_task.apply_async()
-        time.sleep(1)
-        i += 1
-
-
-@router.post(
-    "/single-neuron/{org_id}/{project_id}/run-realtime",
-    summary="Run neuron simulation realtime",
-)
-def execute_simulation(
+def distributed_simulation(
     model_self: str,
     org_id: str,
     project_id: str,
     request: StreamSimulationBodyRequest,
     token: str = Depends(verify_jwt),
-) -> StreamSimulationResponse:
+):
     """
-    Initiates a simulation for a single neuron or synaptome model and returns a simulation results in realtime.
+    Run a distributed neuron simulation across multiple instances, either in autosave or real-time mode.
 
-    This endpoint starts the simulation process and allows for real-time updates of
-    the simulation's progress. The response includes immediate details about the simulation
-    task, enabling clients to track the status as it runs.
+    Parameters:
+    -----------
+    `org_id : str`
+        The organization ID associated with the simulation.
+    `project_id : str`
+        The project ID associated with the simulation.
+    `model_self : str`
+        The URI or identifier for the neuron model being simulated.
 
-    > **Note**:
-        This endpoint is designed for real-time simulation execution. Ensure the provided
-        model ID and organization/project IDs are valid to avoid errors during the simulation start.
-        Clients can use /stop endpoint to stop the simulation.
+    `request : StreamSimulationBodyRequest`
+        The request body containing the simulation configuration, and optional flags for autosave and real-time streaming.
+
+    The `StreamSimulationBodyRequest` consists of:
+
+        - `config : SingleNeuronSimulationConfig`
+            The detailed configuration of the neuron simulation, including current injection parameters, recording locations, etc.
+        - `autosave : Optional[bool]`
+            Flag to indicate whether the simulation should automatically save the results. Defaults to `False`.
+        - `realtime : Optional[bool]`
+            Flag to enable real-time streaming of simulation results. Defaults to `False`.
+
+
+    Returns:
+    --------
+    StreamingResponseWithCleanup or dict
+        If `realtime` is True, the response is a `StreamingResponseWithCleanup` that streams simulation state to the client.
+        If `autosave` is True, the response is a dictionary with simulation job details and resources.
+
+    Raises:
+    -------
+    BlueNaasError
+        Raised if there is an internal error during the simulation process.
+    Exception
+        Raised if there is an issue while streaming simulation data.
+
+    Notes:
+    ------
+    - The function handles current-varying and frequency-varying simulations.
+    - Tasks are distributed as individual simulation instances.
+    - The simulation results are either streamed in real time or saved based on the `realtime` and `autosave` flags.
+    - If `realtime` is enabled, streaming response is generated to update clients continuously about the state of the simulation.
+        and if autosave is enabled too then result will be saved at the end of the simulation at the celery task definition
+    - If `autosave` is enabled, the simulation state and results are stored and accessible later through Nexus queries.
+
+    Workflow:
+    ---------
+    1. Prepare simulation resources if `autosave` is enabled.
+    2. Pre-process the simulation, calculating synapses and building the model.
+    3. Depending on the simulation type (current or frequency varying), generate tasks for simulation instances.
+    4. Group and run tasks asynchronously using Celery's `group`.
+    5. If `realtime`, stream the simulation results to the client.
+    6. If `autosave`, return a job ID and resources for querying simulation status and results later.
+
     """
-    return run_simulation(
+    return run_distributed_simulation(
         org_id=org_id,
+        token=token,
         project_id=project_id,
         model_self=model_self,
         config=request.config,
         autosave=request.autosave,
-        token=token,
+        realtime=request.realtime,
     )
 
 
 @router.post(
-    "/single-neuron/{org_id}/{project_id}/{task_id}/stop",
+    "/single-neuron/{org_id}/{project_id}/{task_id}/shutdown",
     summary=(
         """
-        Stop neuron simulation
+        Stop neuron distributed simulation
         """
     ),
 )
-async def kill_simulation(
+async def shutdown_simulation(
     org_id: str,
     project_id: str,
-    task_id: str,
+    job_id: str,
     token: str = Depends(verify_jwt),
 ) -> StopSimulationResponse:
     """
-    Stops a running simulation identified by the given task ID
-
-    This endpoint can only stop simulations that were started using the
-    `/run-realtime` endpoint.
-
-    > **Note**:
-        only available when simulation started by the /run-realtime endpoint
+    Shutdown a running simulation identified by the given job ID (grouped simulations)
     """
-    return await stop_simulation(
+    return await do_shutdown_simulation(
         token=token,
-        task_id=task_id,
+        task_id=job_id,
     )
-
-
-@router.post(
-    "/single-neuron/{org_id}/{project_id}/launch",
-    summary="Run neuron simulation",
-)
-async def launch_simulation(
-    model_self: str,
-    org_id: str,
-    project_id: str,
-    config: SingleNeuronSimulationConfig,
-    response: Response,
-    token: str = Depends(verify_jwt),
-) -> SimulationResultItemResponse:
-    """
-    Launches a simulation as a background task for a specified model
-    This endpoint allows to initiate a simulation which will be processed
-    in the background.
-    """
-    try:
-        result = submit_simulation(
-            token=token,
-            model_self=model_self,
-            org_id=org_id,
-            project_id=project_id,
-            config=config,
-        )
-        response.status_code = status.HTTP_202_ACCEPTED
-        return result
-    except BlueNaasError as e:
-        response.status_code = e.http_status_code
-        raise e
-    except Exception as e:
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-        raise e
 
 
 @router.get(

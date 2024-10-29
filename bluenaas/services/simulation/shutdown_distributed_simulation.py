@@ -7,39 +7,39 @@ from bluenaas.core.exceptions import BlueNaasError, BlueNaasErrorCode
 
 
 class StopSimulationResponse(BaseModel):
-    task_id: str
+    job_id: str
     message: str
 
 
-async def stop_simulation(
+async def do_shutdown_simulation(
     token: str,
-    task_id: str,
+    job_id: str,
 ) -> StopSimulationResponse:
-    from celery.result import AsyncResult
+    from celery.result import GroupResult
     from bluenaas.infrastructure.celery import celery_app
 
     try:
-        task_result = AsyncResult(
-            task_id,
+        job_result = GroupResult(
+            job_id,
             app=celery_app,
         )
 
-        task_result.revoke(terminate=True)
+        job_result.revoke(terminate=True)
 
         return JSONResponse(
             content={
-                "task_id": task_id,
-                "message": f"Simulation running by {task_id} is terminated",
+                "task_id": job_id,
+                "message": f"Simulation running by {job_id} is terminated",
             },
             status_code=HTTPStatus.ACCEPTED,
             headers={
-                "x-bnaas-task": task_id,
+                "x-bnaas-job": job_id,
             },
         )
     except Exception as ex:
         raise BlueNaasError(
             http_status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             error_code=BlueNaasErrorCode.INTERNAL_SERVER_ERROR,
-            message="Error while stopping simulation",
+            message="Error while shuting down grouped simulation ",
             details=ex.__str__(),
         ) from ex

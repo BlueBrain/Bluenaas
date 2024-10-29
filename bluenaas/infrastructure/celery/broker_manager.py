@@ -62,3 +62,19 @@ def get_bulk_queues_depths(
     except Exception as ex:
         logger.exception(f"error: failed to gather queues data {ex}")
         raise ex
+
+
+class Lock:
+    def __init__(self, prefix: str) -> None:
+        self.r = redis.Redis.from_url(url=settings.CELERY_BROKER_URL)
+        self.prefix = prefix
+
+    def acquire_lock(self, name: str, timeout: float = 10):
+        self.r.setnx(f"{self.prefix}_{name}", "LOCKED")
+        self.r.expire(f"{self.prefix}_{name}", time=timeout)
+
+    def release_lock(self, name):
+        self.r.delete(f"{self.prefix}_{name}")
+
+    def get_lock(self, name):
+        self.r.get(f"{self.prefix}_{name}")

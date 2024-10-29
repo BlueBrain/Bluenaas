@@ -168,6 +168,7 @@ class SimulationResultItemResponse(BaseModel):
 
     me_model_self: str
     synaptome_model_self: Optional[str]
+    job_id: Optional[str] = None
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -183,6 +184,7 @@ class PaginatedSimulationsResponse(BaseModel):
 class StreamSimulationBodyRequest(BaseModel):
     config: SingleNeuronSimulationConfig
     autosave: Optional[bool] = False
+    realtime: Optional[bool] = False
 
 
 class StreamSimulationResponse(BaseModel):

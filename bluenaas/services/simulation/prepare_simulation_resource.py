@@ -1,7 +1,9 @@
+from typing import Optional
 from loguru import logger
 from http import HTTPStatus
 
 from bluenaas.domains.simulation import (
+    SimulationStatus,
     StimulationPlotConfig,
     SimulationStimulusConfig,
     StimulationItemResponse,
@@ -40,14 +42,20 @@ def get_stimulation_plot_data(
     return plot_data
 
 
-def setup_simulation_resources(
+def prepare_simulation_resources(
     token,
     model_self,
     org_id,
     project_id,
     config,
+    status: Optional[SimulationStatus] = "pending",
 ):
-    nexus_helper = Nexus({"token": token, "model_self_url": model_self})
+    nexus_helper = Nexus(
+        {
+            "token": token,
+            "model_self_url": model_self,
+        }
+    )
     # Step 1: Generate stimulus data to be saved in nexus resource in step 1
     try:
         me_model_self = model_self
@@ -77,7 +85,7 @@ def setup_simulation_resources(
     try:
         sim_response = nexus_helper.create_simulation_resource(
             simulation_config=config,
-            status="pending",
+            status=status,
             org_id=org_id,
             project_id=project_id,
         )
@@ -91,15 +99,15 @@ def setup_simulation_resources(
         raise BlueNaasError(
             http_status_code=HTTPStatus.BAD_GATEWAY,
             error_code=BlueNaasErrorCode.NEXUS_ERROR,
-            message="Creating nexus resource for simulation failed",
+            message="Creating nexus simulation resource failed",
             details=ex.__str__(),
         ) from ex
     except Exception as ex:
-        logger.exception(f"Creating nexus resource for simulation failed {ex}")
+        logger.exception(f"Creating nexus simulation resource failed {ex}")
         raise BlueNaasError(
             http_status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             error_code=BlueNaasErrorCode.SIMULATION_ERROR,
-            message="Creating nexus resource for simulation failed",
+            message="Creating nexus simulation resource failed",
             details=ex.__str__(),
         ) from ex
 
