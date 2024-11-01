@@ -3,6 +3,7 @@
 # pylint: disable=import-outside-toplevel
 import os
 import re
+import subprocess
 from loguru import logger
 from bluenaas.core.stimulation.utils import is_current_varying_simulation
 from bluenaas.domains.morphology import SynapseSeries
@@ -58,6 +59,9 @@ class BaseCell:
 
         # make sure x86_64 is in current dir before importing neuron
         os.chdir(model_path)
+
+        logger.info("[Mechanisms presence checker]")
+        subprocess.check_output([f"{os.getcwd()}/x86_64/special"])
 
         # importing here to avoid segmentation fault
         from bluecellulab import Cell
@@ -215,6 +219,15 @@ class BaseCell:
                 f"Single Neuron Simulation error: {e}",
             )
             raise Exception(f"Single Neuron Simulation error: {e}")
+
+    def start_solo_simulation(
+        self,
+        config: SingleNeuronSimulationConfig,
+        current_synapse_series: list[SynapseSeries] | None,
+        frequency_to_synapse_series: dict[float, list[SynapseSeries]] | None,
+        enable_realtime,
+    ):
+        pass
 
 
 class HocCell(BaseCell):

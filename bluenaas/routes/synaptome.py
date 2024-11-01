@@ -11,7 +11,6 @@ from bluenaas.domains.morphology import (
 from bluenaas.infrastructure.kc.auth import verify_jwt
 from bluenaas.services.synapses_placement import generate_synapses_placement
 
-
 router = APIRouter(
     prefix="/synaptome",
     tags=["Synaptome"],

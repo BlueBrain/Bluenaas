@@ -52,4 +52,8 @@ all:
 	make kill
 	make build
 	make start
+
 a: all
+b: build
+s: start
+k: kill

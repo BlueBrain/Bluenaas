@@ -26,6 +26,7 @@ from bluenaas.routes.simulation import router as simulation_router
 from bluenaas.routes.graph_data import router as graph_router
 from bluenaas.routes.synaptome import router as synaptome_router
 from bluenaas.routes.validation import router as validation_router
+from bluenaas.routes.neuron_model import router as neuron_model_router
 
 
 sentry_sdk.init(
@@ -128,6 +129,7 @@ base_router.include_router(simulation_router)
 base_router.include_router(synaptome_router)
 base_router.include_router(graph_router)
 base_router.include_router(validation_router)
+base_router.include_router(neuron_model_router)
 
 
 app.include_router(base_router)

@@ -1,13 +1,18 @@
 import json
+
 from typing import Any, Optional
 
+from bluenaas.core.stimulation.utils import (
+    is_current_varying_simulation,
+)
 from bluenaas.core.stimulation.runners import (
     init_current_varying_simulation,
     init_frequency_varying_simulation,
 )
-from bluenaas.core.stimulation.utils import is_current_varying_simulation
-from bluenaas.domains.simulation import SingleNeuronSimulationConfig
-from bluenaas.infrastructure.celery.bluenaas_task import BluenaasTask
+from bluenaas.domains.simulation import (
+    SingleNeuronSimulationConfig,
+)
+from bluenaas.infrastructure.celery.full_simulation_task_class import BluenaasTask
 from bluenaas.infrastructure.celery import celery_app
 
 
@@ -15,6 +20,7 @@ from bluenaas.infrastructure.celery import celery_app
     bind=True,
     base=BluenaasTask,
     serializer="json",
+    queue="simulator",
 )
 def create_simulation(
     self,

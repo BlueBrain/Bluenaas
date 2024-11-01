@@ -69,6 +69,7 @@ def fetch_simulation_status_and_results(
             and not valid_simulation.distribution
         ):
             return convert_to_simulation_response(
+                job_id=None,
                 simulation_uri=simulation_uri,
                 simulation_resource=valid_simulation,
                 me_model_self=me_model_self,
@@ -81,6 +82,7 @@ def fetch_simulation_status_and_results(
         distribution = file_response.json()
 
         return convert_to_simulation_response(
+            job_id=None,
             simulation_uri=simulation_uri,
             simulation_resource=valid_simulation,
             me_model_self=me_model_self,

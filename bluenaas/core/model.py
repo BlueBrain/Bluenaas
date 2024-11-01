@@ -51,6 +51,7 @@ class Model:
         self.threshold_current: int = 1
         self.holding_current: float | None = hyamp
         self.resource: NexusBaseResource = None
+        self.model_uuid = None
 
     def build_model(self):
         """Prepare model."""
@@ -62,7 +63,7 @@ class Model:
         self.threshold_current = threshold_current
 
         model_uuid = nexus_helper.get_model_uuid()
-
+        self.model_uuid = model_uuid
         model_path = get_model_path(model_uuid)
         lock = FileLock(f"{model_path/'dir.lock'}")
 
