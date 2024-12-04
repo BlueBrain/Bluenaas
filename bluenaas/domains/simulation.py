@@ -1,25 +1,15 @@
 from datetime import datetime
-from typing import Annotated, List, Literal, Optional, TypedDict
+from typing import Annotated, List, Literal, Optional, TypeVar, Generic, TypedDict
 from pydantic import BaseModel, Field, PositiveFloat, field_validator
 
 
 SimulationType = Literal["single-neuron-simulation", "synaptome-simulation"]
 NexusSimulationType = Literal["SingleNeuronSimulation", "SynaptomeSimulation"]
 
-SimulationStatus = Literal["pending", "started", "success", "failure"]
+SimulationStatus = Literal[
+    "pending", "started", "success", "failure", "partial_success"
+]
 SimulationEvent = Literal["init", "info", "data", "error"]
-SimulationStreamData = TypedDict(
-    "SimulationStreamData",
-    {
-        "label": str,
-        "amplitude": str,
-        "frequency": str,
-        "recording": str,
-        "varying_key": str,
-        "t": list[float],
-        "v": list[float],
-    },
-)
 
 SIMULATION_TYPE_MAP: dict[NexusSimulationType, SimulationType] = {
     "SingleNeuronSimulation": "single-neuron-simulation",
@@ -77,14 +67,12 @@ class SimulationWithSynapseBody(BaseModel):
 
 
 class SingleNeuronSimulationConfig(BaseModel):
-    synaptome: list[SynaptomeSimulationConfig] | None = Field(
-        alias="synaptome", default=None
-    )
+    synaptome: list[SynaptomeSimulationConfig] | None = None
     current_injection: CurrentInjectionConfig
     record_from: list[RecordingLocation]
     conditions: ExperimentSetupConfig
-    type: SimulationType = None
-    duration: int = None
+    type: SimulationType
+    duration: int
 
     @field_validator("current_injection")
     @classmethod
@@ -99,7 +87,7 @@ class SingleNeuronSimulationConfig(BaseModel):
                         "Amplitude should be a constant float if frequency is a list"
                     )
         elif isinstance(value.stimulus.amplitudes, float):
-            synapses = config.get("synapses") or []
+            synapses = config.get("synaptome") or []
             synapses_with_variable_frequencies = [
                 synapse for synapse in synapses if isinstance(synapse.frequency, list)
             ]
@@ -150,11 +138,17 @@ class PlotDataEntry(BaseModel):
     frequency: Optional[float]
 
 
-class SimulationResultItemResponse(BaseModel):
+class BrainRegion(BaseModel):
     id: str
-    self_uri: str
+    label: str
+
+
+class SimulationDetailsResponse(BaseModel):
+    id: str
+    job_id: str | None = None
     status: SimulationStatus | None = None
     results: Optional[dict]
+    error: Optional[str]
 
     type: SimulationType
     name: str
@@ -163,28 +157,59 @@ class SimulationResultItemResponse(BaseModel):
     created_at: datetime
     injection_location: str
     recording_location: list[str] | str
-    brain_location: dict
+    brain_region: BrainRegion
     config: Optional[SingleNeuronSimulationConfig]
 
-    me_model_self: str
-    synaptome_model_self: Optional[str]
-    job_id: Optional[str] = None
-
-    def __getitem__(self, key):
-        return getattr(self, key)
+    me_model_id: str
+    synaptome_model_id: Optional[str]
 
 
-class PaginatedSimulationsResponse(BaseModel):
-    page_offset: int
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    offset: int
     page_size: int
     total: int
-    results: list[SimulationResultItemResponse]
+    results: list[T]
 
 
 class StreamSimulationBodyRequest(BaseModel):
     config: SingleNeuronSimulationConfig
     autosave: Optional[bool] = False
     realtime: Optional[bool] = False
+
+
+WORKER_TASK_STATES = Literal[
+    "INIT",
+    "PROGRESS",
+    "PENDING",
+    "STARTED",
+    "SUCCESS",
+    "FAILURE",
+    "REVOKED",
+    "PARTIAL_SUCCESS",
+]
+
+VaryingType = Literal["current", "frequency"]
+
+
+class SimulationStreamData(TypedDict):
+    state: WORKER_TASK_STATES
+    name: str
+    recording: str
+    amplitude: float
+    frequency: Optional[float]
+    varying_key: str
+    varying_order: float
+    varying_type: VaryingType
+    x: list[float]
+    y: list[float]
+
+
+class SimulationErrorMessage(TypedDict):
+    state: WORKER_TASK_STATES
+    error: str
 
 
 class StreamSimulationResponse(BaseModel):

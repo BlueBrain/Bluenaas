@@ -1,12 +1,13 @@
-from typing import List, TypeVar, Union
+from typing import List, TypeVar, Union, overload
 
 T = TypeVar("T")
 
 
-def ensure_list(payload: Union[List[T], T], expected_type: T) -> List[T]:
-    # If the payload is a single item, wrap it in a list
-    if not isinstance(payload, list):
-        return [payload]
-
-    elif isinstance(payload, list):
-        return payload
+@overload
+def ensure_list(arg: List[T]) -> List[T]: ...
+@overload
+def ensure_list(arg: T) -> List[T]: ...
+def ensure_list(arg: Union[T, List[T]]) -> List[T]:
+    if isinstance(arg, list):
+        return arg
+    return [arg]

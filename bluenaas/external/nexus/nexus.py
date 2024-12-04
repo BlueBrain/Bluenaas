@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote_plus, unquote, urlencode
 from loguru import logger
 import requests
+import json
 from bluenaas.domains.simulation import (
     SingleNeuronSimulationConfig,
     StimulationItemResponse,
@@ -22,7 +23,6 @@ from bluenaas.utils.generate_id import generate_id
 from bluenaas.utils.util import get_model_path
 from bluenaas.core.exceptions import ResourceDeprecationError, SimulationError
 from typing import Any, Optional, Sequence
-import json
 
 HTTP_TIMEOUT = 10  # seconds
 
@@ -140,13 +140,13 @@ class Nexus:
 
     def fetch_resources_of_type(
         self,
-        org_label: str,
-        project_label: str,
+        org_label: Optional[str],
+        project_label: Optional[str],
         res_types: Sequence[str],
         offset: int,
         size: int,
-        created_at_start: datetime,
-        created_at_end: datetime,
+        created_at_start: Optional[datetime],
+        created_at_end: Optional[datetime],
     ):
         query_params = [("type", res_type) for res_type in res_types]
         query_params.append(("size", str(size)))
@@ -154,8 +154,17 @@ class Nexus:
         query_params.append(
             ("createdAt", construct_time_range(created_at_start, created_at_end))
         )
+        query_params.append(("deprecated", "false"))
 
-        endpoint = f"{settings.NEXUS_ROOT_URI}/resources/{org_label}/{project_label}?{urlencode(query_params)}"
+        # Sort resources in descending time of creation (i.e. newest first)
+        query_params.append(("sort", "-_createdAt"))
+        query_params.append(("sort", "-_updatedAt"))
+
+        if org_label is None and project_label is None:
+            endpoint = f"{settings.NEXUS_ROOT_URI}/resources?{urlencode(query_params)}"
+        else:
+            endpoint = f"{settings.NEXUS_ROOT_URI}/resources/{org_label}/{project_label}?{urlencode(query_params)}"
+
         r = requests.get(
             endpoint,
             headers=self.headers,
@@ -228,7 +237,7 @@ class Nexus:
             project_id=project_id,
         )
 
-        distribution_url = f"{settings.NEXUS_ROOT_URI}/files/{org_id}/{project_id}/{quote_plus(saved_file["@id"])}?rev={saved_file["_rev"]}"
+        distribution_url = f"{settings.NEXUS_ROOT_URI}/files/{org_id}/{project_id}/{quote_plus(saved_file["@id"])}"
         distribution = {
             "@type": "DataDownload",
             "name": saved_file["_filename"],
@@ -245,34 +254,6 @@ class Nexus:
         }
         return distribution
 
-    # Note: This function doesn't seem to work for distributions uploaded on s3. See discussion here - https://bluebrainproject.slack.com/archives/G013PKBUHT2/p1728567806810799
-    def update_nexus_distribution(
-        self, file_url: str, filename: str, content_type: str, data_to_add: dict
-    ):
-        current_distribution = self.fetch_file_by_url(file_url=file_url).json()
-
-        updated_json = current_distribution | data_to_add
-
-        # Prepare the files for the PUT request
-        files = {"file": (filename, json.dumps(updated_json), content_type)}
-        file_headers = self.headers | {
-            # mandatory to upload to a S3 storage (AWS)
-            "x-nxs-file-content-length": str(len(updated_json))
-        }
-
-        response = requests.put(
-            file_url,
-            headers=file_headers,
-            files=files,
-            timeout=HTTP_TIMEOUT,
-        )
-
-        if not response.ok:
-            raise Exception(
-                f"Error updating distribution: {response.status_code}", response.json()
-            )
-        return response.json()
-
     def compose_url(self, url):
         return self.nexus_base + quote_plus(url, safe=":")
 
@@ -284,7 +265,7 @@ class Nexus:
         workflow_resource = self.fetch_resource_by_id(workflow_id)
 
         configuration = None
-        workflow_resource_list = ensure_list(workflow_resource["hasPart"], dict)
+        workflow_resource_list = ensure_list(workflow_resource["hasPart"])
         for part in workflow_resource_list:
             if part["@type"] == "EModelConfiguration":
                 configuration = part
@@ -303,7 +284,7 @@ class Nexus:
         morphology_resource = self.fetch_resource_by_id(morph_id)
 
         swc = None
-        distributions = ensure_list(morphology_resource["distribution"], dict)
+        distributions = ensure_list(morphology_resource["distribution"])
         for distribution in distributions:
             if distribution["encodingFormat"] == "application/swc":
                 swc = distribution
@@ -329,7 +310,7 @@ class Nexus:
 
     def get_memodel_morphology(self, memodel_resource):
         morphology_id = None
-        for haspart in ensure_list(memodel_resource["hasPart"], dict):
+        for haspart in ensure_list(memodel_resource["hasPart"]):
             if haspart.get("@type") == "NeuronMorphology":
                 morphology_id = haspart.get("@id")
         if morphology_id is None:
@@ -340,7 +321,7 @@ class Nexus:
     def get_mechanisms(self, configuration):
         # fetch only SubCellularModelScripts. Morphologies will be fetched later
         scripts = []
-        for config in ensure_list(configuration["uses"], dict):
+        for config in ensure_list(configuration["uses"]):
             if config.get("@type") != "NeuronMorphology":
                 scripts.append(config)
 
@@ -360,7 +341,7 @@ class Nexus:
         # logger.info(f'@@-> {model_resources=}')
         mechanisms = []
         for model_resource in model_resources:
-            distributions = ensure_list(model_resource["distribution"], dict)
+            distributions = ensure_list(model_resource["distribution"])
             logger.info(f'@@-> ds:{model_resource["distribution"]}')
             distribution = list(
                 filter(
@@ -380,7 +361,7 @@ class Nexus:
         workflow_resource = self.fetch_resource_by_id(workflow_id)
 
         script = None
-        for generated in ensure_list(workflow_resource["generates"], dict):
+        for generated in ensure_list(workflow_resource["generates"]):
             if generated["@type"] == "EModelScript":
                 script = generated
                 break
@@ -532,9 +513,40 @@ class Nexus:
     def get_model_uuid(self):
         return self.model_uuid
 
+    def prepare_nexus_simulation(
+        self,
+        sim_name: str,
+        description: str,
+        config: SingleNeuronSimulationConfig,
+        model: dict,
+        status: str,
+        distribution: dict[str, Any],
+    ):
+        record_locations = [
+            f"{r.section}_{r.offset}" for r in ensure_list(config.record_from)
+        ]
+
+        return BaseNexusSimulationResource(
+            type=["Entity", "SingleNeuronSimulation"]
+            if config.type == "single-neuron-simulation"
+            else ["Entity", "SynaptomeSimulation"],
+            name=sim_name,
+            description=description,
+            context="https://bbp.neuroshapes.org",
+            distribution=distribution,
+            injectionLocation=config.current_injection.inject_to,
+            recordingLocation=ensure_list(record_locations),
+            brainLocation=model["brainLocation"],
+            # Model can be MEModel or SingleNeuronSynaptome
+            used={"@type": model["@type"], "@id": model["@id"]},
+            isDraft=True,
+            status=status,
+        )
+
     def create_simulation_resource(
         self,
         simulation_config: SingleNeuronSimulationConfig,
+        stimulus_plot_data: list[StimulationItemResponse],
         status: SimulationStatus,
         org_id: str,
         project_id: str,
@@ -545,20 +557,30 @@ class Nexus:
         except Exception:
             raise SimulationError(f"No me_model with self {self.model_id} found")
 
-        # Step 2: Create simulation resource with status = "PENDING"
+        # Step 2: Create distribution resource
+        distribution = self.create_simulation_distribution(
+            model_self=self.model_id,
+            config=simulation_config,
+            stimulus_plot_data=stimulus_plot_data,
+            org_id=org_id,
+            project_id=project_id,
+            results=None,
+        )
+        # Step 3: Create simulation resource with status = "PENDING"
         try:
             sim_name = (
                 "single-neuron-simulation-{}".format(generate_id(10))
                 if simulation_config.type == "single-neuron-simulation"
                 else "synaptome-simulation-{}".format(generate_id(10))
             )
-            description = "simulation"
+            description = "background simulation created by bluenaas api"
             simulation_resource = self.prepare_nexus_simulation(
                 sim_name=sim_name,
                 description=description,
                 config=simulation_config,
                 model=model,
                 status=status,
+                distribution=distribution,
             )
             simulation_resource_url = f"{settings.NEXUS_ROOT_URI}/resources/{org_id}/{project_id}?indexing=sync"
             simulation_response = requests.post(
@@ -670,53 +692,121 @@ class Nexus:
                 f"Could not update simulation resource {resource_self} with status {status}"
             )
 
-    def prepare_nexus_simulation(
-        self,
-        sim_name: str,
-        description: str,
-        config: SingleNeuronSimulationConfig,
-        model: dict,
-        status: str,
-    ):
-        record_locations = [
-            f"{r.section}_{r.offset}" for r in ensure_list(config.record_from, str)
-        ]
-        return BaseNexusSimulationResource(
-            type=["Entity", "SingleNeuronSimulation"]
-            if config.type == "single-neuron-simulation"
-            else ["Entity", "SynaptomeSimulation"],
-            name=sim_name,
-            description=description,
-            context="https://bbp.neuroshapes.org",
-            distribution=[],
-            injectionLocation=config.current_injection.inject_to,
-            recordingLocation=ensure_list(record_locations, str),
-            brainLocation=model["brainLocation"],
-            # Model can be MEModel or SingleNeuronSynaptome
-            used={"@type": model["@type"], "@id": model["@id"]},
-            isDraft=True,
-            status=status,
-        )
-
     def create_simulation_distribution(
         self,
+        model_self: str,
         config: SingleNeuronSimulationConfig,
-        stimulus: list[StimulationItemResponse],
+        stimulus_plot_data: list[StimulationItemResponse],
         org_id: str,
         project_id: str,
+        results: Optional[dict],
+    ) -> dict[str, Any]:
+        # Step 1: Create a distribution file to save results.
+        try:
+            simulation_config = SingleNeuronSimulationConfig.model_validate(config)
+            distribution_payload = NexusSimulationPayload(
+                config=simulation_config,
+                simulation=results,
+                stimulus=stimulus_plot_data,
+            )
+            distribution_name = (
+                "simulation-config-single-neuron.json"
+                if simulation_config.type == "single-neuron-simulation"
+                else "simulation-config-synaptome.json"
+            )
+            distribution_resource = self.create_nexus_distribution(
+                payload=distribution_payload.model_dump(by_alias=True),
+                filename=distribution_name,
+                org_id=org_id,
+                project_id=project_id,
+            )
+            return distribution_resource
+        except Exception as e:
+            dist_id = f"ORG {org_id} PROJECT {project_id} MODEL {model_self}"
+            logger.exception(
+                f"Could not create distribution with simulation results for resource {dist_id}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not create distribution with simulation results for resource {dist_id}"
+            )
+
+    def update_json_nexus_distribution(
+        self, file_url: str, filename: str, data_to_add: dict
     ):
-        distribution_payload = NexusSimulationPayload(
-            config=config, simulation=None, stimulus=stimulus
+        file_metadata = self.fetch_file_metadata(file_url=file_url).json()
+        current_distribution = self.fetch_file_by_url(file_url=file_url).json()
+
+        updated_json = current_distribution | data_to_add
+        file_content = json.dumps(updated_json)
+        # Prepare the files for the PUT request
+        files = {"file": (filename, file_content, "application/json")}
+        file_headers = self.headers | {
+            # mandatory in order to upload to a S3 storage (AWS)
+            "x-nxs-file-content-length": str(len(file_content))
+        }
+
+        response = requests.put(
+            f"{file_url}?rev={file_metadata["_rev"]}",
+            headers=file_headers,
+            files=files,
+            timeout=30,  # The request to write the distribution with simulation results sometimes takes more than 10 seconds.
         )
-        distribution_name = (
-            "simulation-config-single-neuron.json"
-            if config.type == "single-neuron-simulation"
-            else "simulation-config-synaptome.json"
-        )
-        distribution_resource = self.create_nexus_distribution(
-            payload=distribution_payload.model_dump(by_alias=True),
-            filename=distribution_name,
-            org_id=org_id,
-            project_id=project_id,
-        )
-        return distribution_resource
+
+        if not response.ok:
+            raise Exception(
+                f"Error updating distribution: {response.status_code}", response.json()
+            )
+        return response.json()
+
+    def update_simulation_with_final_results(
+        self,
+        simulation_resource_self: str,
+        org_id: str,
+        project_id: str,
+        status: SimulationStatus,
+        results: dict,
+        error_message: str | None,
+    ):
+        """
+        Called when simulation finished successfully.
+        This function updates simulation status to success and adds the final simulation result to the distribution.
+        """
+        # Step 1: Update the distribution file with results
+        try:
+            simulation_resource = self.fetch_resource_by_self(
+                resource_self=simulation_resource_self
+            )
+
+            distribution = ensure_list(simulation_resource["distribution"])[0]
+            distribution_url = distribution["contentUrl"]
+
+            self.update_json_nexus_distribution(
+                file_url=distribution_url,
+                filename=distribution["name"],
+                data_to_add={"simulation": results},
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not update distribution with simulation results for resource {simulation_resource['_self']}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not update distribution with simulation results for resource {simulation_resource['_self']}"
+            )
+
+        # Step 2: Update status of simulation resource to success
+        try:
+            return self.update_simulation_status(
+                org_id=org_id,
+                project_id=project_id,
+                resource_self=simulation_resource["_self"],
+                status=status,
+                is_draft=True,
+                err=error_message,
+            )
+        except Exception as e:
+            logger.exception(
+                f"Could not update simulation resource {simulation_resource['_self']} with status {status}. Exception {e}"
+            )
+            raise SimulationError(
+                f"Could not update simulation resource {simulation_resource['_self']} with status {status}"
+            )

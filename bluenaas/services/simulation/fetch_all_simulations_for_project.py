@@ -1,16 +1,15 @@
 from datetime import datetime
 from http import HTTPStatus
 from typing import Optional
-from urllib.parse import quote_plus
 from loguru import logger
 
 from bluenaas.domains.nexus import FullNexusSimulationResource
 from bluenaas.external.nexus.nexus import Nexus
 from bluenaas.domains.simulation import (
-    SimulationResultItemResponse,
+    SimulationDetailsResponse,
     SimulationType,
     NexusSimulationType,
-    PaginatedSimulationsResponse,
+    PaginatedResponse,
 )
 from bluenaas.core.exceptions import BlueNaasError, BlueNaasErrorCode
 from bluenaas.utils.simulation import (
@@ -27,9 +26,9 @@ def fetch_all_simulations_of_project(
     sim_type: Optional[SimulationType],
     offset: int,
     size: int,
-    created_at_start: datetime,
-    created_at_end: datetime,
-) -> PaginatedSimulationsResponse:
+    created_at_start: Optional[datetime],
+    created_at_end: Optional[datetime],
+) -> PaginatedResponse[SimulationDetailsResponse]:
     try:
         nexus_sim_types: list[NexusSimulationType] = (
             ["SingleNeuronSimulation", "SynaptomeSimulation"]
@@ -52,7 +51,7 @@ def fetch_all_simulations_of_project(
         )
         nexus_simulations = nexus_sim_response["_results"]
 
-        simulations: list[SimulationResultItemResponse] = []
+        simulations: list[SimulationDetailsResponse] = []
 
         for nexus_sim in nexus_simulations:
             try:
@@ -90,11 +89,13 @@ def fetch_all_simulations_of_project(
                     me_model_self = me_model["_self"]
 
                 simulation = convert_to_simulation_response(
-                    simulation_uri=quote_plus(full_simulation_resource["@id"]),
+                    job_id=None,
+                    simulation_uri=full_simulation_resource["@id"],
                     simulation_resource=valid_simulation,
                     me_model_self=me_model_self,
                     synaptome_model_self=synaptome_model_self,
-                    distribution=None,
+                    simulation_config=None,
+                    results=None,
                 )
                 simulations.append(simulation)
             except Exception as err:
@@ -103,8 +104,8 @@ def fetch_all_simulations_of_project(
                     f"Nexus Simulation {nexus_sim["_self"]} could not be converted to a bluenaas compatible simulation {err}"
                 )
 
-        return PaginatedSimulationsResponse(
-            page_offset=offset,
+        return PaginatedResponse(
+            offset=offset,
             page_size=len(simulations),
             total=nexus_sim_response["_total"],
             results=simulations,

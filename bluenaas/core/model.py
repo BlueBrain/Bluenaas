@@ -18,11 +18,13 @@ from bluenaas.domains.morphology import (
     SynapsePlacementBody,
     SynapsePlacementResponse,
     SynapsePosition,
-    SynapseSeries,
     SynapsesPlacementConfig,
+    SynapseMetadata,
 )
 from bluenaas.domains.nexus import NexusBaseResource
-from bluenaas.domains.simulation import SynaptomeSimulationConfig
+from bluenaas.domains.simulation import (
+    SynaptomeSimulationConfig,
+)
 from bluenaas.external.nexus.nexus import Nexus
 from bluenaas.utils.util import (
     get_sections,
@@ -136,9 +138,11 @@ class Model:
 
     def _calc_synapse_count(
         self, config: SynapseConfig, distance: float, sec_length: float
-    ) -> int | None:
+    ) -> int:
         if config.target == SectionTarget.soma:
+            assert config.soma_synapse_count is not None
             return config.soma_synapse_count
+
         x_symbol, X_symbol = symbols("x X")
         expression = parse_expr(f"{config.formula} * {sec_length}")
         formula_value = expression.subs({x_symbol: distance, X_symbol: distance})
@@ -262,8 +266,8 @@ class Model:
         synapse_simulation_config: SynaptomeSimulationConfig,
         offset: int,
         frequencies_to_apply: list[float],
-    ) -> list[SynapseSeries]:
-        synapse_series: list[SynapseSeries] = []
+    ) -> list[SynapseMetadata]:
+        synapse_series: list[SynapseMetadata] = []
         _, section_map = get_sections(self.CELL._cell)
         sections = section_map
 
@@ -307,17 +311,14 @@ class Model:
             for _ in range(synapse_count):
                 synapse_id = int(f"{len(synapse_series)}{offset}")
                 synapse_series.append(
-                    {
-                        "id": synapse_id,
-                        "series": self._get_synapse_series_for_section(
-                            section_info=section_info,
-                            seg_indices_to_include=segment_indices,
-                            placement_config=synapse_placement_config,
-                            simulation_config=synapse_simulation_config,
-                        ),
-                        "synapseSimulationConfig": synapse_simulation_config,
-                        "frequencies_to_apply": frequencies_to_apply,
-                    }
+                    SynapseMetadata(
+                        id=synapse_id,
+                        section_info=section_info,
+                        segment_indices=segment_indices,
+                        simulation_config=synapse_simulation_config,
+                        frequencies_to_apply=frequencies_to_apply,
+                        type=synapse_placement_config.type,
+                    )
                 )
 
         return synapse_series

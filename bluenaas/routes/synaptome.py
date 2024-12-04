@@ -26,7 +26,7 @@ router = APIRouter(
 def place_synapses(
     request: Request,
     params: SynapsePlacementBody,
-    model_self: str = Query(),
+    model_id: str = Query(),
     token: str = Depends(verify_jwt),
 ) -> SynapsePlacementResponse:
     """
@@ -36,7 +36,7 @@ def place_synapses(
     in a 3D model.
     """
     return generate_synapses_placement(
-        model_self=model_self,
+        model_self=model_id,
         token=token,
         params=params,
         req_id=request.state.request_id,

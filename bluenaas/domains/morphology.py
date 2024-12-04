@@ -58,7 +58,7 @@ class SynapseConfig(BaseModel):
     name: str
     target: SectionTarget | None = None
     type: int
-    distribution: Literal["exponential", "linear", "formula"]
+    distribution: Literal["exponential", "linear", "formula"] | None = None
     formula: Optional[str | None] = None
     soma_synapse_count: int | None = None
     seed: int
@@ -140,3 +140,12 @@ SynapseSeries = TypedDict(
         "frequencies_to_apply": list[float],
     },
 )
+
+
+class SynapseMetadata(BaseModel):
+    id: int
+    section_info: LocationData
+    segment_indices: list[int]
+    type: int  # Inhibitory or exhibitory
+    simulation_config: SynaptomeSimulationConfig
+    frequencies_to_apply: list[float]

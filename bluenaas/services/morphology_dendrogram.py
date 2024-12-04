@@ -1,56 +1,19 @@
 import json
 import re
-import signal
-import multiprocessing as mp
-from multiprocessing.synchronize import Event
-from bluenaas.utils.streaming import StreamingResponseWithCleanup, cleanup
+from typing import Generator
+
 from loguru import logger
 from http import HTTPStatus as status
-from queue import Empty as QueueEmptyException
+
+from bluenaas.utils.streaming import StreamingResponseWithCleanup, cleanup_worker
 from bluenaas.core.exceptions import (
     BlueNaasError,
     BlueNaasErrorCode,
     MorphologyGenerationError,
 )
-from bluenaas.core.model import model_factory
-from bluenaas.utils.const import QUEUE_STOP_EVENT
-
-
-def _build_morphology_dendrogram(
-    model_self: str,
-    token: str,
-    queue: mp.Queue,
-    stop_event: Event,
-):
-    def stop_process():
-        stop_event.set()
-
-    signal.signal(signal.SIGTERM, stop_process)
-    signal.signal(signal.SIGINT, stop_process)
-
-    try:
-        model = model_factory(
-            model_self=model_self,
-            hyamp=None,
-            bearer_token=token,
-        )
-        morphology_dendrogram = model.CELL.get_dendrogram()
-        morph_dend_str = json.dumps(morphology_dendrogram)
-
-        chunks: list[str] = re.findall(r".{1,100000}", morph_dend_str)
-
-        for index, chunk in enumerate(chunks):
-            logger.debug(f"Queueing chunk {index} for morphology dendrogram...")
-            queue.put(chunk)
-
-        queue.put(QUEUE_STOP_EVENT)
-
-    except Exception as ex:
-        queue.put(QUEUE_STOP_EVENT)
-        logger.exception(f"Morphology dendrogram builder error: {ex}")
-        raise MorphologyGenerationError from ex
-    finally:
-        logger.debug("Morphology dendrogram builder ended")
+from bluenaas.infrastructure.celery.tasks.build_morphology_dendogram import (
+    build_morphology_dendrogram,
+)
 
 
 def get_single_morphology_dendrogram(
@@ -59,54 +22,45 @@ def get_single_morphology_dendrogram(
     req_id: str,
 ):
     try:
-        ctx = mp.get_context("spawn")
-
-        morpho_dend_queue = ctx.Queue()
-        stop_event = ctx.Event()
-
-        process = ctx.Process(
-            target=_build_morphology_dendrogram,
-            args=(
-                model_self,
-                token,
-                morpho_dend_queue,
-                stop_event,
-            ),
-            name=f"morphology_dendrogram_processor:{req_id}",
+        build_morphology_job = build_morphology_dendrogram.apply_async(
+            kwargs={
+                "model_self": model_self,
+                "token": token,
+            }
         )
-        process.daemon = True
-        process.start()
+        logger.debug(f"Started morphology dendogram task {build_morphology_job.id}")
+        built_morphology_str = build_morphology_job.get()
 
-        def queue_streamify(
-            que: mp.Queue,
-            stop_event: Event,
-        ):
-            while True:
-                try:
-                    q_result = que.get(timeout=1)
-                except QueueEmptyException:
-                    if process.is_alive():
-                        continue
-                    if not que.empty():
-                        continue
-                    else:
-                        raise Exception("Child process died unexpectedly")
-                if q_result == QUEUE_STOP_EVENT or stop_event.is_set():
-                    break
+        def stream_morphology_chunks() -> Generator[str, None, None]:
+            if isinstance(built_morphology_str, MorphologyGenerationError):
+                yield f"{json.dumps(
+                    {
+                        "error_code": BlueNaasErrorCode.MORPHOLOGY_GENERATION_ERROR,
+                        "message": "Morphology generation failed",
+                        "details": built_morphology_str.__str__(),
+                    }
+                )}\n"
+                return
 
-                yield q_result
+            chunks: list[str] = re.findall(r".{1,100000}", built_morphology_str)
+
+            for index, chunk in enumerate(chunks):
+                logger.debug(f"Queueing chunk {index} for morphology dendogram...")
+                yield chunk
 
         return StreamingResponseWithCleanup(
-            queue_streamify(que=morpho_dend_queue, stop_event=stop_event),
+            stream_morphology_chunks(),
             media_type="application/x-ndjson",
-            finalizer=lambda: cleanup(stop_event, process),
+            finalizer=lambda: cleanup_worker(
+                build_morphology_job.id,
+            ),
         )
 
     except Exception as ex:
-        logger.exception(f"retrieving morphology dendrogram data failed {ex}")
+        logger.exception(f"retrieving morphology data failed {ex}")
         raise BlueNaasError(
             http_status_code=status.INTERNAL_SERVER_ERROR,
             error_code=BlueNaasErrorCode.INTERNAL_SERVER_ERROR,
-            message="retrieving morphology dendrogram data failed",
+            message="retrieving morphology data failed",
             details=ex.__str__(),
         ) from ex

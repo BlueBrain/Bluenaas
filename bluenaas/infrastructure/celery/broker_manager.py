@@ -69,7 +69,7 @@ class Lock:
         self.r = redis.Redis.from_url(url=settings.CELERY_BROKER_URL)
         self.prefix = prefix
 
-    def acquire_lock(self, name: str, timeout: float = 10):
+    def acquire_lock(self, name: str, timeout: int = 30):
         self.r.setnx(f"{self.prefix}_{name}", "LOCKED")
         self.r.expire(f"{self.prefix}_{name}", time=timeout)
 

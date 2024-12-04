@@ -393,7 +393,6 @@ def apply_multiple_simulations(args, runner):
 
 
 def setup_basic_simulation_config(
-    template_params,
     config: SingleNeuronSimulationConfig,
     injection_segment: float,
     recording_location: RecordingLocation,

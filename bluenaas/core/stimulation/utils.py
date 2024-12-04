@@ -2,10 +2,13 @@ from __future__ import annotations
 import numpy as np
 from typing import Dict, NamedTuple
 from enum import Enum, auto
+import pandas  # type: ignore
+from random import random, randint
 from bluenaas.domains.morphology import (
     SynapseConfig,
-    SynapseSeries,
     SynapsesPlacementConfig,
+    LocationData,
+    SynapseMetadata,
 )
 from bluenaas.domains.simulation import (
     ExperimentSetupConfig,
@@ -44,21 +47,65 @@ class StimulusName(Enum):
 StimulusRecordings = Dict[str, Recording]
 
 
+def _get_pandas_series_for_section(
+    section_info: LocationData,
+    seg_indices_to_include: list[int],
+    synapse_type: int,
+    simulation_config: SynaptomeSimulationConfig,
+):
+    from bluecellulab.circuit.synapse_properties import SynapseProperty  # type: ignore
+
+    random_index = randint(0, len(seg_indices_to_include) - 1)
+    target_segment = seg_indices_to_include[random_index]
+
+    position = random()
+    # 1. get the seg_x for target segment
+    start = section_info.neuron_segments_offset[target_segment]
+    # 2. get the seg_x for target segment +1
+    end = section_info.neuron_segments_offset[target_segment + 1]
+    diff = end - start
+    offset = position * diff
+    # 3. if the offset is bind to the section id not segment id then
+    # offset = (position * diff) + start
+
+    syn_description = pandas.Series(
+        {
+            SynapseProperty.PRE_GID: 1,
+            SynapseProperty.AXONAL_DELAY: 1.0,
+            SynapseProperty.G_SYNX: simulation_config.weight_scalar,
+            SynapseProperty.TYPE: synapse_type,
+            SynapseProperty.U_SYN: 0.505514,
+            SynapseProperty.D_SYN: 684.279663,
+            SynapseProperty.F_SYN: 1.937531,
+            SynapseProperty.DTC: 2.983491,
+            # SynapseProperty.NRRP: 2,
+            # "source_population_name": "hippocampus_projections",
+            # "source_popid": 2126,
+            # "target_popid": 378,
+            # SynapseProperty.AFFERENT_SECTION_POS: 0.365956,
+            SynapseProperty.POST_SECTION_ID: section_info.neuron_section_id,
+            SynapseProperty.POST_SEGMENT_ID: target_segment,
+            SynapseProperty.POST_SEGMENT_OFFSET: offset,
+        }
+    )
+    return syn_description
+
+
 def add_single_synapse(
     cell,
-    synapse: SynapseSeries,
+    synapse: SynapseMetadata,
     experimental_setup: ExperimentSetupConfig,
 ):
     from bluecellulab.circuit.config.sections import Conditions  # type: ignore
     from bluecellulab.synapse.synapse_types import SynapseID  # type: ignore
-    from bluecellulab import Connection
+    from bluecellulab import Connection  # type: ignore
 
     condition_parameters = Conditions(
         celsius=experimental_setup.celsius,
         v_init=experimental_setup.vinit,
         randomize_gaba_rise_time=True,
     )
-    synid = SynapseID(f"{synapse["id"]}", synapse["id"])
+    synid = SynapseID(f"{synapse.id}", synapse.id)
     # A tuple containing source and target popids used by the random number generation.
     # Should correspond to source_popid and target_popid
     # TODO: remove `popids` if not needed
@@ -69,7 +116,12 @@ def add_single_synapse(
 
     cell.add_replay_synapse(
         synapse_id=synid,
-        syn_description=synapse["series"],
+        syn_description=_get_pandas_series_for_section(
+            section_info=synapse.section_info,
+            seg_indices_to_include=synapse.segment_indices,
+            synapse_type=synapse.type,
+            simulation_config=synapse.simulation_config,
+        ),
         connection_modifiers=connection_modifiers,
         condition_parameters=condition_parameters,
         popids=popids,
@@ -78,9 +130,9 @@ def add_single_synapse(
     cell_synapse = cell.synapses[synid]
 
     spike_train = generate_pre_spiketrain(
-        duration=synapse["synapseSimulationConfig"].duration,
-        delay=synapse["synapseSimulationConfig"].delay,
-        frequencies=synapse["frequencies_to_apply"],
+        duration=synapse.simulation_config.duration,
+        delay=synapse.simulation_config.delay,
+        frequencies=synapse.frequencies_to_apply,
     )
     # TODO: remove `spike_threshold` default value is -30 and that's fine
     spike_threshold = -900.0  # TODO: Synapse - How to get spike threshold
@@ -129,7 +181,7 @@ def get_stimulus_name(protocol_name):
 def init_process_worker(neuron_global_params):
     """Load global parameters for the NEURON environment in each worker
     process."""
-    from bluecellulab.simulation.neuron_globals import NeuronGlobals
+    from bluecellulab.simulation.neuron_globals import NeuronGlobals  # type: ignore
 
     NeuronGlobals.get_instance().load_params(neuron_global_params)
 

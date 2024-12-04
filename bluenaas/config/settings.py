@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
     CELERY_APP_NAME: str = "bluenaas"
     CELERY_QUE_SIMULATIONS: str = "simulations"
+    CELERY_FAST_TASKS_QUEUE: str = "fast_tasks_queue"
 
     AWS_ACCESS_KEY_ID: str = "test"
     AWS_SECRET_ACCESS_KEY: str = "test"

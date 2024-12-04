@@ -7,7 +7,11 @@ import subprocess
 from pathlib import Path
 import numpy as np
 from loguru import logger as L
-from bluenaas.domains.morphology import ExclusionRule, LocationData, SynapseSeries
+from bluenaas.domains.morphology import (
+    ExclusionRule,
+    LocationData,
+    SynapseMetadata,
+)
 
 PADDING = 2.0
 
@@ -434,19 +438,15 @@ def generate_pre_spiketrain(
 
 
 def log_stats_for_series_in_frequency(
-    sim_configs: list[SynapseSeries],
+    sim_configs: list[SynapseMetadata],
 ) -> None:
-    sim_id_to_sim_configs: dict[str, list[SynapseSeries]] = {}
+    sim_id_to_sim_configs: dict[str, list[SynapseMetadata]] = {}
 
     for sim_config in sim_configs:
-        if sim_config["synapseSimulationConfig"].id in sim_id_to_sim_configs:
-            sim_id_to_sim_configs[sim_config["synapseSimulationConfig"].id].append(
-                sim_config
-            )
+        if sim_config.simulation_config.id in sim_id_to_sim_configs:
+            sim_id_to_sim_configs[sim_config.simulation_config.id].append(sim_config)
         else:
-            sim_id_to_sim_configs[sim_config["synapseSimulationConfig"].id] = [
-                sim_config
-            ]
+            sim_id_to_sim_configs[sim_config.simulation_config.id] = [sim_config]
 
     for sim_id in sim_id_to_sim_configs:
         configs_for_id = sim_id_to_sim_configs[sim_id]
@@ -456,8 +456,8 @@ def log_stats_for_series_in_frequency(
         sim_stats_to_count: dict[str, int] = {}
 
         for config in configs_for_id:
-            sim = config["synapseSimulationConfig"]
-            key = f"WeightScalar: {sim.weight_scalar} Duration: {sim.duration} Delay: {sim.delay} frequency {' '.join(map(str, config['frequencies_to_apply']))}"
+            sim = config.simulation_config
+            key = f"WeightScalar: {sim.weight_scalar} Duration: {sim.duration} Delay: {sim.delay} frequency {' '.join(map(str, config.frequencies_to_apply))}"
             if key in sim_stats_to_count:
                 sim_stats_to_count[key] = sim_stats_to_count[key] + 1
             else:

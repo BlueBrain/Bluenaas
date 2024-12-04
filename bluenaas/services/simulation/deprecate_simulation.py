@@ -18,7 +18,7 @@ def deprecate_simulation(
     org_id: str,
     project_id: str,
     simulation_uri: str = Field(..., description="URL-encoded simulation URI"),
-) -> None:
+) -> DeprecateNexusResponse:
     try:
         simulation_id = unquote(simulation_uri)
         nexus_helper = Nexus(

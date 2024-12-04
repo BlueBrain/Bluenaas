@@ -4,24 +4,20 @@ contains the single neuron simulation endpoint (single neuron, single neuron wit
 """
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from typing import Optional
 
 
 from bluenaas.domains.nexus import DeprecateNexusResponse
 from bluenaas.domains.simulation import (
-    SimulationResultItemResponse,
+    SimulationDetailsResponse,
     SimulationType,
-    PaginatedSimulationsResponse,
-    StreamSimulationBodyRequest,
+    PaginatedResponse,
+    SingleNeuronSimulationConfig,
 )
 from bluenaas.infrastructure.kc.auth import verify_jwt
 from bluenaas.services.simulation.run_distributed_simulation import (
     run_distributed_simulation,
-)
-from bluenaas.services.simulation.shutdown_distributed_simulation import (
-    StopSimulationResponse,
-    do_shutdown_simulation,
 )
 
 from bluenaas.services.simulation.fetch_simulation_status_and_results import (
@@ -43,11 +39,14 @@ router = APIRouter(
     summary="Run neuron simulation distributed per worker",
 )
 def distributed_simulation(
-    model_self: str,
+    model_id: str,
     org_id: str,
     project_id: str,
-    request: StreamSimulationBodyRequest,
+    config: SingleNeuronSimulationConfig,
+    background_tasks: BackgroundTasks,
     token: str = Depends(verify_jwt),
+    realtime: bool = True,
+    autosave: bool = True,
 ):
     """
     Run a distributed neuron simulation across multiple instances, either in autosave or real-time mode.
@@ -58,27 +57,20 @@ def distributed_simulation(
         The organization ID associated with the simulation.
     `project_id : str`
         The project ID associated with the simulation.
-    `model_self : str`
+    `model_id : str`
         The URI or identifier for the neuron model being simulated.
-
-    `request : StreamSimulationBodyRequest`
-        The request body containing the simulation configuration, and optional flags for autosave and real-time streaming.
-
-    The `StreamSimulationBodyRequest` consists of:
-
-        - `config : SingleNeuronSimulationConfig`
-            The detailed configuration of the neuron simulation, including current injection parameters, recording locations, etc.
-        - `autosave : Optional[bool]`
-            Flag to indicate whether the simulation should automatically save the results. Defaults to `False`.
-        - `realtime : Optional[bool]`
-            Flag to enable real-time streaming of simulation results. Defaults to `False`.
-
+    `realtime`: bool
+        If realtime is true, simulation results are streamed in chunks. Response type is StreamingResponseWithCleanup.
+        If realtime is false, simulation is started in the background and a HTTP JSON Response (of type BackgroundSimulationStatusResponse) or error is returned.
+    `autosave`: bool
+        If autosave is true, the results of simulations are automatically saved in the database. The response contains the resourceId that can be used to fetch these results.
+        Please note, realtime=False and autosave=False is an invalid configuration.
 
     Returns:
     --------
-    StreamingResponseWithCleanup or dict
+    StreamingResponseWithCleanup or BackgroundSimulationStatusResponse
         If `realtime` is True, the response is a `StreamingResponseWithCleanup` that streams simulation state to the client.
-        If `autosave` is True, the response is a dictionary with simulation job details and resources.
+        If `autosave` is True, the response is a BackgroundSimulationStatusResponse with simulation job details and resources.
 
     Raises:
     -------
@@ -110,41 +102,46 @@ def distributed_simulation(
         org_id=org_id,
         token=token,
         project_id=project_id,
-        model_self=model_self,
-        config=request.config,
-        autosave=request.autosave,
-        realtime=request.realtime,
+        model_self=model_id,
+        config=config,
+        autosave=autosave,
+        realtime=realtime,
+        background_tasks=background_tasks,
     )
 
 
-@router.post(
-    "/single-neuron/{org_id}/{project_id}/{task_id}/shutdown",
-    summary=(
-        """
-        Stop neuron distributed simulation
-        """
-    ),
-)
-async def shutdown_simulation(
-    org_id: str,
-    project_id: str,
-    job_id: str,
-    token: str = Depends(verify_jwt),
-) -> StopSimulationResponse:
-    """
-    Shutdown a running simulation identified by the given job ID (grouped simulations)
-    """
-    return await do_shutdown_simulation(
-        token=token,
-        task_id=job_id,
-    )
+# @router.post(
+#     "/single-neuron/{org_id}/{project_id}/{task_id}/shutdown",
+#     summary=(
+#         """
+#         Stop neuron distributed simulation
+#         """
+#     ),
+# )
+# async def shutdown_simulation(
+#     org_id: str,
+#     project_id: str,
+#     job_id: str,
+#     token: str = Depends(verify_jwt),
+# ) -> SimulationDetailsResponse:
+#     """
+#     Shutdown a running simulation identified by the given job ID (grouped simulations)
+#     """
+#     return await do_shutdown_simulation(
+#         token=token,
+#         task_id=job_id,
+#     )
 
 
 @router.get(
     "/single-neuron/{org_id}/{project_id}",
+    description="Get all simulations for a project",
     summary=(
         """
-        Get all neuron simulations per project
+        Returns all simulations in the provided project. 
+        Please note, the data for simulations does not contain simulation results (x, y points) 
+        or simulation config to not bloat the response.
+        Only nexus simulations that conform with the latest schema are returned.
         """
     ),
 )
@@ -152,7 +149,7 @@ async def get_all_simulations_for_project(
     org_id: str,
     project_id: str,
     simulation_type: Optional[SimulationType] = None,
-    page_offset: int = 0,
+    offset: int = 0,
     page_size: int = 20,
     created_at_start: Optional[datetime] = Query(
         None, description="Filter by createdAt date (YYYY-MM-DDTHH:MM:SSZ)"
@@ -161,24 +158,13 @@ async def get_all_simulations_for_project(
         None, description="Filter by createdAt date (YYYY-MM-DDTHH:MM:SSZ)"
     ),
     token: str = Depends(verify_jwt),
-) -> PaginatedSimulationsResponse:
-    """
-    Retrieves all simulations associated with a specific project.
-
-    This endpoint allows users to fetch all simulations for a given project,
-    identified by the organization ID and project ID. The results are paginated,
-    and users can filter the simulations based on their creation dates and simulation type.
-
-    > **Note**:
-    Simulation results (x, y points) are not included in the response to avoid
-    excessive data transfer.
-    """
+) -> PaginatedResponse[SimulationDetailsResponse]:
     return fetch_all_simulations_of_project(
         token=token,
         org_id=org_id,
         project_id=project_id,
         sim_type=simulation_type,
-        offset=page_offset,
+        offset=offset,
         size=page_size,
         created_at_start=created_at_start,
         created_at_end=created_at_end,
@@ -186,59 +172,42 @@ async def get_all_simulations_for_project(
 
 
 @router.get(
-    "/single-neuron/{org_id}/{project_id}/{simulation_uri}",
+    "/single-neuron/{org_id}/{project_id}/{simulation_id:path}",
     summary=(
         """
-        Get simulation data
+        Get results & status for a previously started simulation. 
+        If simulation is not complete the results are null.
+        `simulation_id` should be url encoded.
         """
     ),
 )
 async def get_simulation(
     org_id: str,
     project_id: str,
-    simulation_uri: str = Path(
-        ..., description="URL-encoded simulation URI (resource ID in nexus context)"
-    ),
+    simulation_id: str,
     token: str = Depends(verify_jwt),
-) -> SimulationResultItemResponse:
-    """
-    Retrieves the results, status and metadata of a previously completed simulation.
-
-    This endpoint allows to fetch the results and current status of a simulation
-    identified by its URI. If the simulation is still in progress, the results will be
-    returned as null. The organization ID and project ID are required to locate the
-    specific simulation context.
-    """
+) -> SimulationDetailsResponse:
     return fetch_simulation_status_and_results(
         token=token,
         org_id=org_id,
         project_id=project_id,
-        simulation_uri=simulation_uri,
+        simulation_uri=simulation_id,
     )
 
 
 @router.delete(
-    "/single-neuron/{org_id}/{project_id}/{simulation_uri}",
-    summary="Delete simulation",
+    "/single-neuron/{org_id}/{project_id}/{simulation_id:path}",
+    summary="Delete simulation resource",
 )
 async def delete_simulation(
     org_id: str,
     project_id: str,
-    simulation_uri: str = Path(
-        ..., description="URL-encoded simulation URI (resource ID in nexus context)"
-    ),
+    simulation_id: str,
     token: str = Depends(verify_jwt),
 ) -> DeprecateNexusResponse:
-    """
-    Deletes a simulation resource identified by its URI (resource ID in nexus context)
-
-    This endpoint allows  to delete a specific simulation resource
-    based on the provided organization ID, project ID, and simulation URI.
-    Once deleted, the simulation resource will no longer be accessible.
-    """
     return deprecate_simulation(
         token=token,
         org_id=org_id,
         project_id=project_id,
-        simulation_uri=simulation_uri,
+        simulation_uri=simulation_id,
     )
